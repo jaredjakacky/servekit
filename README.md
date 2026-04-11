@@ -1,5 +1,10 @@
 # Servekit
 
+[![Release](https://img.shields.io/github/v/release/jaredjakacky/servekit?sort=semver)](https://github.com/jaredjakacky/servekit/releases)
+[![CI](https://github.com/jaredjakacky/servekit/actions/workflows/ci.yaml/badge.svg)](https://github.com/jaredjakacky/servekit/actions/workflows/ci.yaml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/jaredjakacky/servekit)](https://github.com/jaredjakacky/servekit/blob/main/go.mod)
+[![License](https://img.shields.io/github/license/jaredjakacky/servekit)](https://github.com/jaredjakacky/servekit/blob/main/LICENSE)
+
 ## Overview
 
 Servekit is a small Go package for bootstrapping HTTP services on top of `net/http`. It gives a service a real operational baseline from the first constructor call: probes, JSON response handling, request and correlation IDs, access logs, panic recovery, graceful shutdown, opt-in CORS, and built-in OpenTelemetry tracing and metrics.
