@@ -2,7 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/jaredjakacky/servekit?sort=semver)](https://github.com/jaredjakacky/servekit/releases)
 [![CI](https://github.com/jaredjakacky/servekit/actions/workflows/ci.yaml/badge.svg)](https://github.com/jaredjakacky/servekit/actions/workflows/ci.yaml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/jaredjakacky/servekit)](https://github.com/jaredjakacky/servekit/blob/main/go.mod)
+[![Go Support](https://img.shields.io/badge/go%20support-1.25.x%20%7C%201.26.x-00ADD8)](https://github.com/jaredjakacky/servekit/actions/workflows/ci.yaml)
 [![License](https://img.shields.io/github/license/jaredjakacky/servekit)](https://github.com/jaredjakacky/servekit/blob/main/LICENSE)
 
 ## Overview

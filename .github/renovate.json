@@ -42,6 +42,26 @@
     },
     {
       "customType": "regex",
+      "managerFilePatterns": ["/^README\\.md$/"],
+      "datasourceTemplate": "custom.go-supported-floor",
+      "depNameTemplate": "go-floor",
+      "versioningTemplate": "semver-coerced",
+      "matchStrings": [
+        "\\[!\\[Go Support\\]\\(https://img\\.shields\\.io/badge/go%20support-(?<currentValue>\\d+\\.\\d+)\\.x%20%7C%20\\d+\\.\\d+\\.x-[A-Za-z0-9]+\\)\\]\\(https://github\\.com/jaredjakacky/servekit/actions/workflows/ci\\.yaml\\)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^README\\.md$/"],
+      "datasourceTemplate": "custom.go-supported-latest",
+      "depNameTemplate": "go-latest",
+      "versioningTemplate": "semver-coerced",
+      "matchStrings": [
+        "\\[!\\[Go Support\\]\\(https://img\\.shields\\.io/badge/go%20support-\\d+\\.\\d+\\.x%20%7C%20(?<currentValue>\\d+\\.\\d+)\\.x-[A-Za-z0-9]+\\)\\]\\(https://github\\.com/jaredjakacky/servekit/actions/workflows/ci\\.yaml\\)"
+      ]
+    },
+    {
+      "customType": "regex",
       "managerFilePatterns": ["/^Makefile$/"],
       "datasourceTemplate": "github-tags",
       "depNameTemplate": "golang/vuln",
