@@ -1,0 +1,15 @@
+# Build outputs and local caches
+.bin/
+.cache/
+coverage.out
+*.test
+*.out
+*.exe
+
+# Local tool state
+.codex
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
