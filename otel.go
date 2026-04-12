@@ -281,8 +281,8 @@ func (c *trackedHijackedConn) Close() error {
 	return err
 }
 
-// newOTelMetricsMiddleware records HTTP request metrics using OTel HTTP
-// semconv-aligned duration histogram boundaries.
+// newOTelMetricsMiddleware records HTTP request metrics using semconv-aligned
+// short-request buckets with a modest long-tail extension for slower handlers.
 func newOTelMetricsMiddleware(obs observabilityConfig) Middleware {
 	meter := obs.meterProvider.Meter(instrumentationName)
 
@@ -291,7 +291,8 @@ func newOTelMetricsMiddleware(obs observabilityConfig) Middleware {
 		"http.server.request.duration",
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(
-			0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+			0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0,
+			2.5, 5.0, 7.5, 10.0, 15.0, 30.0, 60.0,
 		),
 	)
 	inFlight, _ := meter.Int64UpDownCounter("http.server.request.in_flight", metric.WithUnit("{request}"))
