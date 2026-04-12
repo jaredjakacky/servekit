@@ -124,6 +124,10 @@ Servekit's built-in request metrics include:
 - `http.server.request.cancellation.count`
 - `http.server.request.auth_rejection.count`
 
+`http.server.request.duration` uses second-based histogram buckets with fine
+resolution for ordinary request latency and extra buckets at 15s, 30s, and 60s
+for slower long-tail requests.
+
 ## `Run(...)` versus `Handler()`
 
 The main distinction when choosing between `Run(...)` and `Handler()` is where the metrics come from:
