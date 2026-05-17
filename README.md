@@ -223,6 +223,26 @@ The active development line lives on `main`, and that is the only line actively 
 
 Compatibility-impacting changes should be called out explicitly in release notes or release descriptions. Long-lived maintenance branches and backports are not planned unless explicitly noted.
 
+## Development
+
+This repository uses `make` for local verification:
+
+```bash
+make verify
+make test-race
+make govulncheck
+```
+
+`make verify` checks formatting, runs `go vet`, runs tests, builds the runnable examples, and verifies that `go.mod` and `go.sum` are tidy. CI runs verification and race tests on the supported Go versions, and release tags are gated by verification, race tests, and `govulncheck` before publishing.
+
+## Issues and Scope
+
+Bug reports, documentation fixes, small API ergonomics improvements, and compatibility issues are welcome.
+
+Servekit is intentionally scoped as a small `net/http`-first service bootstrap library. Large framework features are likely out of scope, including custom router DSLs, dependency injection, config loading, background job systems, service discovery, and observability backend management.
+
+For security issues, please follow [`SECURITY.md`](SECURITY.md) instead of opening a public issue.
+
 ## License
 
 [MIT](LICENSE)
