@@ -457,7 +457,7 @@ If you are new to the codebase:
 1. [README](../README.md)
 2. [Getting Started](getting-started.md)
 3. [Usage Guide](usage.md)
-4. [API Map](api.md)
+4. API Map
 5. [Advanced Guide](advanced.md)
 6. [Lifecycle and Probes](lifecycle.md)
 7. [Observability and Middleware](observability.md)
