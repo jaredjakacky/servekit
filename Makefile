@@ -16,7 +16,6 @@ export GOCACHE ?= $(CURDIR)/.cache/go-build
 .PHONY: \
 	help \
 	build-examples \
-	verify-docs-examples \
 	fmt \
 	fmt-check \
 	vet \
@@ -36,8 +35,6 @@ help: ## Show available targets.
 build-examples: ## Compile the runnable example programs.
 	@echo "==> build examples"
 	@$(GO) build ./examples/...
-
-verify-docs-examples: build-examples ## Compatibility target for compiling runnable examples.
 
 fmt: ## Format tracked Go source files.
 	@echo "==> formatting"

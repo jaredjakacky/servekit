@@ -230,12 +230,11 @@ This repository uses `make` for local verification:
 ```bash
 make verify
 make build-examples
-make verify-docs-examples
 make test-race
 make govulncheck
 ```
 
-`make verify` checks formatting, runs `go vet`, runs tests, builds the runnable examples, and verifies that `go.mod` and `go.sum` are tidy. `make build-examples` and `make verify-docs-examples` are available when you only want to compile the runnable examples.
+`make verify` checks formatting, runs `go vet`, runs tests, builds the runnable examples, and verifies that `go.mod` and `go.sum` are tidy. `make build-examples` is available when you only want to compile the runnable examples.
 
 CI runs verification and race tests on the supported Go versions. Release tags are gated by those jobs plus `govulncheck` before publishing.
 
