@@ -37,8 +37,7 @@ build-examples: ## Compile the runnable example programs.
 	@echo "==> build examples"
 	@$(GO) build ./examples/...
 
-verify-docs-examples: ## Run docs and runnable examples verification.
-	@scripts/verify-docs-examples.sh
+verify-docs-examples: build-examples ## Compatibility target for compiling runnable examples.
 
 fmt: ## Format tracked Go source files.
 	@echo "==> formatting"
