@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	opskit "github.com/jaredjakacky/opskit"
 	servekit "github.com/jaredjakacky/servekit"
 )
 
@@ -77,6 +79,225 @@ func TestServerHandlerReadyzIncludesReadinessCheckFailureReason(t *testing.T) {
 	}
 	assertJSONField(t, rec, "status", "not_ready")
 	assertJSONField(t, rec, "reason", "database unavailable")
+}
+
+func TestServerHandlerReadyzIncludesOpskitReadiness(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "payments", Kind: "client"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.NotReadyStatus("payments unavailable")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops))
+	s.SetReady(true)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	assertJSONField(t, rec, "status", "not_ready")
+	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more readiness components are not ready")
+}
+
+func TestServerHandlerReadyzStillRequiresServekitLifecycleReadinessWithOpskit(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops))
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	assertJSONField(t, rec, "status", "not_ready")
+}
+
+func TestServerHandlerOpskitReadinessUsesConfiguredTimeout(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(ctx context.Context) opskit.Status {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return opskit.NotReadyStatus("readiness context has no deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 || remaining > time.Second {
+				return opskit.NotReadyStatus("readiness context deadline outside expected range")
+			}
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsTimeout(50*time.Millisecond)))
+	s.SetReady(true)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	assertJSONField(t, rec, "status", "ready")
+}
+
+func TestServerHandlerOpskitReadinessCanDisableServekitTimeout(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(ctx context.Context) opskit.Status {
+			if _, ok := ctx.Deadline(); ok {
+				return opskit.NotReadyStatus("readiness context has unexpected deadline")
+			}
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsTimeout(0)))
+	s.SetReady(true)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	assertJSONField(t, rec, "status", "ready")
+}
+
+func TestServerHandlerOpskitAdminRoutesRequireExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops))
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/admin/components status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestServerHandlerOpskitAdminRoutes(t *testing.T) {
+	t.Parallel()
+
+	var statusCalls atomic.Int32
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			statusCalls.Add(1)
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdmin()))
+	h := s.Handler()
+
+	list := performRequest(t, h, http.MethodGet, "/admin/components")
+	if list.Code != http.StatusOK {
+		t.Fatalf("/admin/components status = %d, want %d", list.Code, http.StatusOK)
+	}
+	assertJSONNestedString(t, list.Body.Bytes(), "config", "components", 0, "component", "name")
+	if got := statusCalls.Load(); got != 0 {
+		t.Fatalf("/admin/components called Status %d times, want 0", got)
+	}
+
+	snapshot := performRequest(t, h, http.MethodGet, "/admin/components/config")
+	if snapshot.Code != http.StatusOK {
+		t.Fatalf("/admin/components/config status = %d, want %d", snapshot.Code, http.StatusOK)
+	}
+	assertJSONNestedString(t, snapshot.Body.Bytes(), "config", "component", "name")
+
+	missing := performRequest(t, h, http.MethodGet, "/admin/components/missing")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("/admin/components/missing status = %d, want %d", missing.Code, http.StatusNotFound)
+	}
+	assertJSONBodyField(t, missing.Body.Bytes(), "error", "component not found")
+}
+
+func TestServerHandlerOpskitAdminRoutesCanUseAuthGate(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdminAuthGate(func(r *http.Request) error {
+		if r.Header.Get("X-Admin-Token") == "local-dev" {
+			return nil
+		}
+		return servekit.Error(http.StatusForbidden, "admin token required", nil)
+	})))
+	h := s.Handler()
+
+	denied := performRequest(t, h, http.MethodGet, "/admin/components")
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("denied status = %d, want %d", denied.Code, http.StatusForbidden)
+	}
+	assertJSONBodyField(t, denied.Body.Bytes(), "error", "admin token required")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/components", nil)
+	req.Header.Set("X-Admin-Token", "local-dev")
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("allowed status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestServerHandlerOpskitAdminSnapshotEncodingFailureReturnsInternalServerError(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opsInspectionComponent{
+		name: "broken",
+		inspection: opskit.Inspection{
+			Details: make(chan struct{}),
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdmin()))
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components/broken")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("/admin/components/broken status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	assertJSONBodyField(t, rec.Body.Bytes(), "error", "response encoding failed")
 }
 
 func TestServerHandlerHealthEndpointMountedOnlyWhenConfigured(t *testing.T) {
@@ -326,6 +547,60 @@ func assertJSONBodyField(t *testing.T, body []byte, key, want string) {
 	if got, _ := payload[key].(string); got != want {
 		t.Fatalf("JSON %q = %q, want %q", key, got, want)
 	}
+}
+
+func assertJSONNestedString(t *testing.T, body []byte, want string, path ...any) {
+	t.Helper()
+
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode JSON body: %v", err)
+	}
+
+	current := payload
+	for _, step := range path {
+		switch key := step.(type) {
+		case string:
+			obj, ok := current.(map[string]any)
+			if !ok {
+				t.Fatalf("path step %q resolved %T, want object", key, current)
+			}
+			current = obj[key]
+		case int:
+			items, ok := current.([]any)
+			if !ok {
+				t.Fatalf("path step %d resolved %T, want array", key, current)
+			}
+			if key < 0 || key >= len(items) {
+				t.Fatalf("path step %d out of range for array length %d", key, len(items))
+			}
+			current = items[key]
+		default:
+			t.Fatalf("unsupported path step %T", step)
+		}
+	}
+
+	got, _ := current.(string)
+	if got != want {
+		t.Fatalf("nested JSON value at %v = %q, want %q", path, got, want)
+	}
+}
+
+type opsInspectionComponent struct {
+	name       string
+	inspection opskit.Inspection
+}
+
+func (c opsInspectionComponent) ComponentInfo() opskit.ComponentInfo {
+	return opskit.ComponentInfo{Name: c.name, Kind: "test"}
+}
+
+func (c opsInspectionComponent) Status(context.Context) opskit.Status {
+	return opskit.ReadyStatus("ready")
+}
+
+func (c opsInspectionComponent) Inspect(context.Context) (opskit.Inspection, error) {
+	return c.inspection, nil
 }
 
 func reserveLoopbackAddr(t *testing.T) string {

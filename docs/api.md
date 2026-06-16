@@ -260,6 +260,26 @@ Everything else in this file exists to customize that path without abandoning `n
 
   Appends checks evaluated by the built-in `/readyz` endpoint.
 
+- `WithOps(registry *opskit.Registry, opts ...OpsOption)`
+
+  Wires an Opskit registry into Servekit's operational routes. `/readyz` includes Opskit readiness after Servekit lifecycle readiness is true. Admin component routes are not exposed unless `WithOpsAdmin()` is supplied.
+
+- `OpsOption`
+
+  Configuration hook for Servekit's Opskit presentation.
+
+- `WithOpsAdmin()`
+
+  Enables read-only Opskit admin routes: `GET /admin/components` and `GET /admin/components/{name}`.
+
+- `WithOpsAdminAuthGate(fn func(*http.Request) error)`
+
+  Enables Opskit admin routes when `fn` is non-nil and protects them with an endpoint-style auth gate.
+
+- `WithOpsTimeout(timeout time.Duration)`
+
+  Sets the timeout for Opskit readiness and admin registry reads. Default: `2s`. Use zero or a negative duration to rely only on the incoming request context.
+
 - `WithDefaultEndpointsEnabled(enabled bool)`
 
   Enables or disables the built-in operational endpoints: `GET /livez`, `GET /readyz`, `GET /version`, and `GET /healthz` when configured.
