@@ -54,7 +54,7 @@ Servekit still owns the HTTP probe and lifecycle gate. When `WithOps(...)` is co
 
 Opskit readiness is only evaluated after Servekit's own readiness is true. That keeps shutdown, drain delay, and explicit `SetReady(...)` behavior authoritative at the HTTP service layer.
 
-Opskit registry reads use a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe budget.
+Opskit readiness and component snapshot reads use a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe or snapshot budget.
 
 ## Readiness checks
 
@@ -117,10 +117,12 @@ If your service wants a richer application-specific health endpoint, supply one 
 
 `WithOpsAdmin()` opts into read-only component admin routes backed by the configured Opskit registry:
 
-- `GET /admin/components` returns passive registry component inventory.
+- `GET /admin/components` returns passive registry component inventory without evaluating component state.
 - `GET /admin/components/{name}` returns one component snapshot.
 
 These routes present passive Opskit state only. Servekit does not run checks, dispatch commands, or execute other active Opskit capabilities.
+
+These routes are controlled by `WithOpsAdmin()`, not by `WithDefaultEndpointsEnabled(...)`.
 
 Use `WithOpsAdminAuthGate(...)` alongside `WithOpsAdmin()` to require an auth gate for these routes. The auth gate configures protection only; it does not expose admin routes by itself.
 

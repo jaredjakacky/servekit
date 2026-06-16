@@ -132,6 +132,7 @@ func New(opts ...Option) *Server {
 	if s.enableDefaultEndpoints {
 		s.registerDefaultEndpoints()
 	}
+	s.registerOpsAdminRoutes()
 	return s
 }
 
@@ -318,8 +319,6 @@ func (s *Server) registerDefaultEndpoints() {
 	}
 
 	s.HandleHTTP(http.MethodGet, "/version", s.buildInfo.Handler(), WithSkipAccessLog(), WithSkipTelemetry())
-
-	s.registerOpsAdminRoutes()
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {

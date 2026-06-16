@@ -503,6 +503,66 @@ func TestServerHandlerDefaultEndpointsCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestServerHandlerOpskitAdminRoutesCanBeEnabledWhenDefaultEndpointsDisabled(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(
+		servekit.WithDefaultEndpointsEnabled(false),
+		servekit.WithOps(ops, servekit.WithOpsAdmin()),
+	)
+	h := s.Handler()
+
+	for _, path := range []string{"/livez", "/readyz", "/version"} {
+		rec := performRequest(t, h, http.MethodGet, path)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusNotFound)
+		}
+	}
+
+	list := performRequest(t, h, http.MethodGet, "/admin/components")
+	if list.Code != http.StatusOK {
+		t.Fatalf("/admin/components status = %d, want %d", list.Code, http.StatusOK)
+	}
+	assertJSONNestedString(t, list.Body.Bytes(), "config", "components", 0, "component", "name")
+
+	snapshot := performRequest(t, h, http.MethodGet, "/admin/components/config")
+	if snapshot.Code != http.StatusOK {
+		t.Fatalf("/admin/components/config status = %d, want %d", snapshot.Code, http.StatusOK)
+	}
+	assertJSONNestedString(t, snapshot.Body.Bytes(), "config", "component", "name")
+}
+
+func TestServerHandlerOpskitAdminRoutesStillRequireOptInWhenDefaultEndpointsDisabled(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(
+		servekit.WithDefaultEndpointsEnabled(false),
+		servekit.WithOps(ops),
+	)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/admin/components status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestServerHandlerUsesProvidedMuxAndGlobalMiddleware(t *testing.T) {
 	t.Parallel()
 

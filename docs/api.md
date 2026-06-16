@@ -278,11 +278,11 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithOpsTimeout(timeout time.Duration)`
 
-  Sets the timeout for Opskit readiness and admin registry reads. Default: `2s`. Use zero or a negative duration to rely only on the incoming request context.
+  Sets the timeout for Opskit readiness and component snapshot reads. Default: `2s`. Use zero or a negative duration to rely only on the incoming request context.
 
 - `WithDefaultEndpointsEnabled(enabled bool)`
 
-  Enables or disables the built-in operational endpoints: `GET /livez`, `GET /readyz`, `GET /version`, and `GET /healthz` when configured.
+  Enables or disables the built-in probe/version endpoints: `GET /livez`, `GET /readyz`, `GET /version`, and `GET /healthz` when configured. This does not disable opt-in Opskit admin routes enabled with `WithOpsAdmin()`.
 
 #### Request limits and defaults
 
