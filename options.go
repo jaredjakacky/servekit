@@ -216,6 +216,7 @@ func WithCorrelationIDEnabled(enabled bool) Option {
 
 // WithDefaultEndpointsEnabled enables or disables built-in /livez, /readyz,
 // and /version endpoints, plus /healthz when WithHealthHandler is supplied.
+// It does not control opt-in Opskit admin routes.
 func WithDefaultEndpointsEnabled(enabled bool) Option {
 	return func(s *Server) {
 		s.enableDefaultEndpoints = enabled

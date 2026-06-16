@@ -65,7 +65,8 @@ func WithOpsAdminAuthGate(fn func(*http.Request) error) OpsOption {
 	}
 }
 
-// WithOpsTimeout sets the timeout used for Opskit readiness and admin reads.
+// WithOpsTimeout sets the timeout used for Opskit readiness and component
+// snapshot reads.
 //
 // The default is 2 seconds. Use zero or a negative duration to disable the
 // Servekit-added timeout and rely only on the incoming request context.
