@@ -46,7 +46,13 @@ Default behavior:
 
 Use `WithOps(...)` when your service has an Opskit registry that represents component readiness.
 
-Servekit still owns the HTTP probe and lifecycle gate. `/readyz` only evaluates Opskit readiness after Servekit's own readiness is true. That keeps shutdown, drain delay, and explicit `SetReady(...)` behavior authoritative at the HTTP service layer.
+Servekit still owns the HTTP probe and lifecycle gate. When `WithOps(...)` is configured, `/readyz` evaluates readiness in this order:
+
+1. Servekit lifecycle readiness: startup, shutdown, drain delay, and explicit `SetReady(...)`.
+2. Opskit registry readiness.
+3. `WithReadinessChecks(...)` checks.
+
+Opskit readiness is only evaluated after Servekit's own readiness is true. That keeps shutdown, drain delay, and explicit `SetReady(...)` behavior authoritative at the HTTP service layer.
 
 Opskit registry reads use a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe budget.
 
@@ -61,7 +67,7 @@ Each `ReadinessCheck` returns:
 
 If any check fails, Servekit reports the service as not ready and includes the error text in the JSON response.
 
-`WithReadinessChecks(...)` remains the standalone readiness hook for services that do not need an Opskit registry. For composed Kit Series services, prefer cached component readiness through Opskit and run expensive checks outside the probe path.
+`WithReadinessChecks(...)` remains the standalone readiness hook for services that do not need an Opskit registry. When `WithOps(...)` is configured, these checks run after Opskit readiness succeeds. For composed Kit Series services, prefer cached component readiness through Opskit and run expensive active dependency checks outside the probe path.
 
 ## `SetReady`
 
@@ -116,7 +122,7 @@ If your service wants a richer application-specific health endpoint, supply one 
 
 These routes present passive Opskit state only. Servekit does not run checks, dispatch commands, or execute other active Opskit capabilities.
 
-Use `WithOpsAdminAuthGate(...)` to require an auth gate for these routes.
+Use `WithOpsAdminAuthGate(...)` alongside `WithOpsAdmin()` to require an auth gate for these routes. The auth gate configures protection only; it does not expose admin routes by itself.
 
 ## External `http.Server` ownership
 

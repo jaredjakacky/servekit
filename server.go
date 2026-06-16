@@ -311,36 +311,7 @@ func (s *Server) registerDefaultEndpoints() {
 		writeStatusJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	}), WithSkipAccessLog(), WithSkipTelemetry())
 
-	s.HandleHTTP(http.MethodGet, "/readyz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.Ready() {
-			writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready"})
-			return
-		}
-		if s.opsRegistry != nil {
-			ctx, cancel := s.opsRequestContext(r)
-			defer cancel()
-			readiness := s.opsRegistry.Readiness(ctx)
-			if !readiness.Ready {
-				writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{
-					"status":    "not_ready",
-					"reason":    readiness.Reason,
-					"readiness": readiness,
-				})
-				return
-			}
-		}
-		for _, check := range s.readinessChecks {
-			if err := check(r.Context()); err != nil {
-				s.logger.Debug("readiness check failed", slog.Any("error", err))
-				writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{
-					"status": "not_ready",
-					"reason": err.Error(),
-				})
-				return
-			}
-		}
-		writeStatusJSON(w, http.StatusOK, map[string]any{"status": "ready"})
-	}), WithSkipAccessLog(), WithSkipTelemetry())
+	s.HandleHTTP(http.MethodGet, "/readyz", http.HandlerFunc(s.handleReadyz), WithSkipAccessLog(), WithSkipTelemetry())
 
 	if s.healthHandler != nil {
 		s.HandleHTTP(http.MethodGet, "/healthz", s.healthHandler, WithSkipAccessLog(), WithSkipTelemetry())
@@ -348,37 +319,28 @@ func (s *Server) registerDefaultEndpoints() {
 
 	s.HandleHTTP(http.MethodGet, "/version", s.buildInfo.Handler(), WithSkipAccessLog(), WithSkipTelemetry())
 
-	if s.opsRegistry != nil && s.opsConfig.adminEnabled {
-		adminOptions := []EndpointOption{WithSkipAccessLog(), WithSkipTelemetry()}
-		if s.opsConfig.adminAuthGate != nil {
-			adminOptions = append(adminOptions, WithAuthGate(s.opsConfig.adminAuthGate))
-		}
-		s.HandleHTTP(http.MethodGet, "/admin/components", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			writeStatusJSON(w, http.StatusOK, map[string]any{"components": s.opsRegistry.Entries()})
-		}), adminOptions...)
-		s.HandleHTTP(http.MethodGet, "/admin/components/{name}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx, cancel := s.opsRequestContext(r)
-			defer cancel()
-			snapshot, err := s.opsRegistry.Snapshot(ctx, r.PathValue("name"))
-			if err != nil {
-				if errors.Is(err, opskit.ErrComponentNotFound) {
-					writeStatusJSON(w, http.StatusNotFound, map[string]any{"error": "component not found"})
-					return
-				}
-				status := statusFromError(err)
-				writeStatusJSON(w, status, map[string]any{"error": clientErrorMessage(err, status)})
-				return
-			}
-			writeStatusJSON(w, http.StatusOK, snapshot)
-		}), adminOptions...)
-	}
+	s.registerOpsAdminRoutes()
 }
 
-func (s *Server) opsRequestContext(r *http.Request) (context.Context, context.CancelFunc) {
-	if s.opsConfig.timeout <= 0 {
-		return r.Context(), func() {}
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if !s.Ready() {
+		writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready"})
+		return
 	}
-	return context.WithTimeout(r.Context(), s.opsConfig.timeout)
+	if s.writeOpsReadinessFailure(w, r) {
+		return
+	}
+	for _, check := range s.readinessChecks {
+		if err := check(r.Context()); err != nil {
+			s.logger.Debug("readiness check failed", slog.Any("error", err))
+			writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"status": "not_ready",
+				"reason": err.Error(),
+			})
+			return
+		}
+	}
+	writeStatusJSON(w, http.StatusOK, map[string]any{"status": "ready"})
 }
 
 // writeStatusJSON writes a small JSON response with the provided status code.
