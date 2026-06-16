@@ -14,7 +14,12 @@ If you provide `WithHealthHandler(...)`, it also mounts:
 
 - `GET /healthz`
 
-These routes are operational defaults. They do not replace application-owned routes.
+If you provide `WithOps(..., WithOpsAdmin())`, Servekit also mounts read-only Opskit component admin routes:
+
+- `GET /admin/components`
+- `GET /admin/components/{name}`
+
+The probe and version routes are operational defaults. Admin routes are opt-in. They do not replace application-owned routes.
 
 `/version` in particular describes the running service binary's build metadata as exposed through Servekit's version package. It is not a runtime statement about a separately installed Servekit library release.
 
@@ -34,7 +39,16 @@ Default behavior:
 
 - before readiness is true, `/readyz` returns `503 Service Unavailable`
 - once the server is ready, `/readyz` returns `200 OK`
+- if `WithOps(...)` is configured and Opskit readiness is not ready, `/readyz` returns `503 Service Unavailable` with Opskit readiness details
 - if readiness checks fail, `/readyz` returns `503 Service Unavailable` with a `reason`
+
+## Opskit readiness
+
+Use `WithOps(...)` when your service has an Opskit registry that represents component readiness.
+
+Servekit still owns the HTTP probe and lifecycle gate. `/readyz` only evaluates Opskit readiness after Servekit's own readiness is true. That keeps shutdown, drain delay, and explicit `SetReady(...)` behavior authoritative at the HTTP service layer.
+
+Opskit registry reads use a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe budget.
 
 ## Readiness checks
 
@@ -46,6 +60,8 @@ Each `ReadinessCheck` returns:
 - a non-`nil` error when it is not
 
 If any check fails, Servekit reports the service as not ready and includes the error text in the JSON response.
+
+`WithReadinessChecks(...)` remains the standalone readiness hook for services that do not need an Opskit registry. For composed Kit Series services, prefer cached component readiness through Opskit and run expensive checks outside the probe path.
 
 ## `SetReady`
 
@@ -90,6 +106,17 @@ This pattern is especially useful in containerized or load-balanced environments
 Servekit deliberately does not impose a built-in health model beyond `/livez` and `/readyz`.
 
 If your service wants a richer application-specific health endpoint, supply one with `WithHealthHandler(...)`. That keeps the default operational probe story intact while still leaving room for service-specific detail.
+
+## Opskit admin routes
+
+`WithOpsAdmin()` opts into read-only component admin routes backed by the configured Opskit registry:
+
+- `GET /admin/components` returns passive registry component inventory.
+- `GET /admin/components/{name}` returns one component snapshot.
+
+These routes present passive Opskit state only. Servekit does not run checks, dispatch commands, or execute other active Opskit capabilities.
+
+Use `WithOpsAdminAuthGate(...)` to require an auth gate for these routes.
 
 ## External `http.Server` ownership
 

@@ -4,6 +4,7 @@ module github.com/jaredjakacky/servekit
 go 1.25.0
 
 require (
+	github.com/jaredjakacky/opskit v0.1.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.44.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.44.0

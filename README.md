@@ -91,6 +91,7 @@ That one server already gives you:
 
 - JSON success and error encoding for `Handle`
 - built-in `GET /livez`, `GET /readyz`, and `GET /version`
+- optional Opskit-backed readiness and component admin presentation
 - request IDs and correlation IDs
 - access logging and panic recovery
 - OpenTelemetry request tracing and request metrics
