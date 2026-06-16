@@ -54,13 +54,12 @@ func WithOpsAdmin() OpsOption {
 
 // WithOpsAdminAuthGate installs an authorization gate for Opskit admin routes.
 //
-// A non-nil gate also enables the admin routes. Return nil from the gate to
-// allow the request or a Servekit HTTPError to control the denial response. A
-// nil gate function is ignored.
+// Admin routes are only exposed when WithOpsAdmin is also supplied. Return nil
+// from the gate to allow the request or a Servekit HTTPError to control the
+// denial response. A nil gate function is ignored.
 func WithOpsAdminAuthGate(fn func(*http.Request) error) OpsOption {
 	return func(cfg *opsConfig) {
 		if fn != nil {
-			cfg.adminEnabled = true
 			cfg.adminAuthGate = fn
 		}
 	}

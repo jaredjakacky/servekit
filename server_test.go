@@ -1,13 +1,16 @@
 package servekit_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -113,10 +116,12 @@ func TestServerHandlerReadyzIncludesOpskitReadiness(t *testing.T) {
 func TestServerHandlerReadyzStillRequiresServekitLifecycleReadinessWithOpskit(t *testing.T) {
 	t.Parallel()
 
+	var statusCalls atomic.Int32
 	ops := opskit.NewRegistry()
 	ops.MustRegister(opskit.ComponentFunc{
 		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
 		Fn: func(context.Context) opskit.Status {
+			statusCalls.Add(1)
 			return opskit.ReadyStatus("configuration loaded")
 		},
 	}, opskit.Required())
@@ -129,6 +134,73 @@ func TestServerHandlerReadyzStillRequiresServekitLifecycleReadinessWithOpskit(t 
 		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 	assertJSONField(t, rec, "status", "not_ready")
+	if got := statusCalls.Load(); got != 0 {
+		t.Fatalf("Opskit readiness called %d times, want 0", got)
+	}
+}
+
+func TestServerHandlerReadyzSkipsReadinessChecksWhenOpskitIsNotReady(t *testing.T) {
+	t.Parallel()
+
+	var checkCalls atomic.Int32
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "payments", Kind: "client"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.NotReadyStatus("payments unavailable")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(
+		servekit.WithOps(ops),
+		servekit.WithReadinessChecks(func(context.Context) error {
+			checkCalls.Add(1)
+			return errors.New("legacy check failed")
+		}),
+	)
+	s.SetReady(true)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more readiness components are not ready")
+	if got := checkCalls.Load(); got != 0 {
+		t.Fatalf("readiness check called %d times, want 0", got)
+	}
+}
+
+func TestServerHandlerReadyzRunsReadinessChecksAfterOpskitReady(t *testing.T) {
+	t.Parallel()
+
+	var checkCalls atomic.Int32
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(
+		servekit.WithOps(ops),
+		servekit.WithReadinessChecks(func(context.Context) error {
+			checkCalls.Add(1)
+			return errors.New("legacy check failed")
+		}),
+	)
+	s.SetReady(true)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "legacy check failed")
+	if got := checkCalls.Load(); got != 1 {
+		t.Fatalf("readiness check called %d times, want 1", got)
+	}
 }
 
 func TestServerHandlerOpskitReadinessUsesConfiguredTimeout(t *testing.T) {
@@ -206,6 +278,28 @@ func TestServerHandlerOpskitAdminRoutesRequireExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestServerHandlerOpskitAdminAuthGateDoesNotEnableAdminRoutes(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdminAuthGate(func(r *http.Request) error {
+		return nil
+	})))
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/admin/components status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestServerHandlerOpskitAdminRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -255,12 +349,15 @@ func TestServerHandlerOpskitAdminRoutesCanUseAuthGate(t *testing.T) {
 		},
 	}, opskit.Required())
 
-	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdminAuthGate(func(r *http.Request) error {
-		if r.Header.Get("X-Admin-Token") == "local-dev" {
-			return nil
-		}
-		return servekit.Error(http.StatusForbidden, "admin token required", nil)
-	})))
+	s := newBlackBoxServer(servekit.WithOps(ops,
+		servekit.WithOpsAdmin(),
+		servekit.WithOpsAdminAuthGate(func(r *http.Request) error {
+			if r.Header.Get("X-Admin-Token") == "local-dev" {
+				return nil
+			}
+			return servekit.Error(http.StatusForbidden, "admin token required", nil)
+		}),
+	))
 	h := s.Handler()
 
 	denied := performRequest(t, h, http.MethodGet, "/admin/components")
@@ -276,6 +373,60 @@ func TestServerHandlerOpskitAdminRoutesCanUseAuthGate(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("allowed status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestServerHandlerOpskitAdminRoutesUseAccessLog(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	s := newBlackBoxServer(
+		servekit.WithLogger(logger),
+		servekit.WithAccessLogEnabled(true),
+		servekit.WithOps(ops,
+			servekit.WithOpsAdmin(),
+			servekit.WithOpsAdminAuthGate(func(r *http.Request) error {
+				if r.Header.Get("X-Admin-Token") == "local-dev" {
+					return nil
+				}
+				return servekit.Error(http.StatusForbidden, "admin token required", nil)
+			}),
+		),
+	)
+	h := s.Handler()
+
+	denied := performRequest(t, h, http.MethodGet, "/admin/components")
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("denied status = %d, want %d", denied.Code, http.StatusForbidden)
+	}
+
+	allowed := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/components", nil)
+	req.Header.Set("X-Admin-Token", "local-dev")
+	h.ServeHTTP(allowed, req)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("allowed status = %d, want %d", allowed.Code, http.StatusOK)
+	}
+
+	logText := logs.String()
+	for _, want := range []string{
+		"method=GET",
+		"path=/admin/components",
+		"status=403",
+		"status=200",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("logs = %q, want %s", logText, want)
+		}
 	}
 }
 

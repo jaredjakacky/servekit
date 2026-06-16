@@ -258,7 +258,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithReadinessChecks(checks ...ReadinessCheck)`
 
-  Appends checks evaluated by the built-in `/readyz` endpoint.
+  Appends checks evaluated by the built-in `/readyz` endpoint after Servekit lifecycle readiness and, when configured, Opskit readiness.
 
 - `WithOps(registry *opskit.Registry, opts ...OpsOption)`
 
@@ -274,7 +274,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithOpsAdminAuthGate(fn func(*http.Request) error)`
 
-  Enables Opskit admin routes when `fn` is non-nil and protects them with an endpoint-style auth gate.
+  Configures an endpoint-style auth gate for Opskit admin routes when they are enabled with `WithOpsAdmin()`. A nil gate is ignored.
 
 - `WithOpsTimeout(timeout time.Duration)`
 
