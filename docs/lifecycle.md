@@ -124,6 +124,8 @@ These routes present passive Opskit state only. Servekit does not run checks, di
 
 These routes are controlled by `WithOpsAdmin()`, not by `WithDefaultEndpointsEnabled(...)`.
 
+Opskit admin routes are not authenticated by default. Production services should protect them with `WithOpsAdminAuthGate(...)` or equivalent network-level controls.
+
 Use `WithOpsAdminAuthGate(...)` alongside `WithOpsAdmin()` to require an auth gate for these routes. The auth gate configures protection only; it does not expose admin routes by itself.
 
 ## External `http.Server` ownership
