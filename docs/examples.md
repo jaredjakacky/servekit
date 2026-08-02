@@ -1,6 +1,6 @@
 # Examples Guide
 
-Servekit's examples are a guided tour, not a random pile of demos. Start with the shortest useful service, then move outward into telemetry, route-level policy, lifecycle, customization, and raw HTTP escape hatches.
+Servekit's examples are a guided tour, not a random pile of demos. Start with the shortest useful service, then see the shared Opskit composition path before moving outward into telemetry, route-level policy, lifecycle, customization, and raw HTTP escape hatches.
 
 If you want the short directory index instead, use [Servekit Examples](../examples/README.md).
 
@@ -22,6 +22,23 @@ It shows the main Servekit promise in one place:
 - a global stdout exporter installed only so the default OTel middleware is visible when you run it
 
 If this example does not feel compelling, the rest of the package probably will not either.
+
+### [`examples/operations`](../examples/operations)
+
+This is the primary Kit Series composition example.
+
+It shows:
+
+- one application-owned Opskit registry
+- required and informational component registration
+- Opskit-backed `/readyz`
+- authenticated `/admin/components` inventory
+- authenticated `/admin/components/{name}` status and inspection snapshots
+- cached readiness state changing without an active check on the probe path
+
+The example imports only Servekit and Opskit. Domain kits join this surface by
+implementing Opskit contracts and being registered by the application; Servekit
+never needs to know which package produced a component.
 
 ### [`examples/telemetry`](../examples/telemetry)
 
@@ -61,9 +78,9 @@ Shows how a service can keep the Servekit model while enforcing a custom respons
 
 ### [`examples/readiness`](../examples/readiness)
 
-Shows the lifecycle story:
+Shows the standalone lifecycle story for a small service without Opskit:
 
-- readiness checks
+- a lightweight readiness predicate over local state
 - explicit warmup behavior
 - custom `/healthz`
 - shutdown drain delay
@@ -105,7 +122,7 @@ Shows what a more heavily customized Servekit service can still look like withou
 
 - custom success and error encoders
 - custom `slog` and `http.Server.ErrorLog`
-- readiness checks and explicit readiness control
+- standalone local readiness predicates and explicit readiness control
 - custom `/healthz`
 - CORS config
 - telemetry provider and labeling overrides
@@ -155,6 +172,7 @@ go run ./examples/<name>
 
 # for example
 go run ./examples/basic
+go run ./examples/operations
 go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/streaming

@@ -41,6 +41,10 @@ These are reference patterns, not the recommended starting point. Use them when 
 
 If you want one runnable all-up reference service rather than smaller patterns, see [`examples/advanced-composition`](../examples/advanced-composition).
 
+For composition across Kit Series packages, start with the shared Opskit
+registry path in [Kit Series Composition](composition.md). That is the normal
+cross-kit boundary, not a Servekit-specific escape hatch.
+
 ### House response contract with one route-specific exception
 
 Use this pattern when the service has a standard response contract but one route needs a different success shape or content type.
@@ -246,6 +250,37 @@ Common reasons to tune these:
 - shutdown behavior needs a different drain delay or graceful-shutdown budget
 
 The default values and the probe/shutdown lifecycle are covered in [Usage Guide](usage.md) and [Lifecycle and Probes](lifecycle.md). The advanced point here is that these settings interact, so they should be chosen together instead of one by one.
+
+## Opskit presentation policy
+
+Servekit can present one shared Opskit registry through `/readyz` and opt-in
+component admin routes:
+
+```go
+s := servekit.New(
+	servekit.WithOps(
+		ops,
+		servekit.WithOpsAdmin(),
+		servekit.WithOpsAdminAuthGate(requireAdmin),
+		servekit.WithOpsTimeout(time.Second),
+	),
+)
+```
+
+Keep these boundaries explicit:
+
+- Servekit owns HTTP exposure, encoding, auth gates, and request deadlines.
+- Opskit owns the registry and passive aggregate read models.
+- Registered components own safe local or cached status, readiness, and
+  inspection data.
+- Worker runtimes or application control planes own active checks and commands.
+
+Admin routes are unauthenticated unless protected. Treat component identity,
+readiness reasons, status attributes, inspection details, and inspection errors
+as HTTP-visible data. Do not include secrets or unredacted user information.
+
+`WithOpsTimeout(...)` adds a deadline to the request context passed into Opskit;
+it is not a substitute for cancellation-aware component implementations.
 
 ## CORS as application policy
 

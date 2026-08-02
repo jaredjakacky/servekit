@@ -92,7 +92,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `ReadinessCheck`
 
-  Dependency check hook used by the built-in `/readyz` endpoint. Returning an error marks the service not ready.
+  Lightweight readiness predicate used by the built-in `/readyz` endpoint. Returning an error marks the service not ready. It should read local or cached state rather than perform active dependency checks.
 
   Shape: `func(context.Context) error`
 
@@ -258,11 +258,11 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithReadinessChecks(checks ...ReadinessCheck)`
 
-  Appends checks evaluated by the built-in `/readyz` endpoint after Servekit lifecycle readiness and, when configured, Opskit readiness.
+  Appends lightweight predicates evaluated by the built-in `/readyz` endpoint after Servekit lifecycle readiness and, when configured, Opskit readiness. For composed Kit Series services, prefer an Opskit registry as the shared readiness path.
 
 - `WithOps(registry *opskit.Registry, opts ...OpsOption)`
 
-  Wires an Opskit registry into Servekit's operational routes. `/readyz` includes Opskit readiness after Servekit lifecycle readiness is true. Admin component routes are not exposed unless `WithOpsAdmin()` is supplied.
+  Wires the shared Opskit registry into Servekit's operational presentation. `/readyz` includes Opskit readiness after Servekit lifecycle readiness is true. Admin component routes are not exposed unless `WithOpsAdmin()` is supplied. Servekit does not depend on the domain kits that registered components.
 
 - `OpsOption`
 
@@ -278,7 +278,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithOpsTimeout(timeout time.Duration)`
 
-  Sets the timeout for Opskit readiness and component snapshot reads. Default: `2s`. Use zero or a negative duration to rely only on the incoming request context.
+  Supplies a context deadline for Opskit readiness and component snapshot reads. Default: `2s`. Use zero or a negative duration to rely only on the incoming request context. Component implementations must observe context cancellation.
 
 - `WithDefaultEndpointsEnabled(enabled bool)`
 

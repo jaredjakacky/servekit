@@ -451,6 +451,71 @@ func TestServerHandlerOpskitAdminSnapshotEncodingFailureReturnsInternalServerErr
 	assertJSONBodyField(t, rec.Body.Bytes(), "error", "response encoding failed")
 }
 
+func TestServerHandlerOpskitPresentationNeverExecutesActiveCapabilities(t *testing.T) {
+	t.Parallel()
+
+	component := &opsActiveCapabilityComponent{}
+	ops := opskit.NewRegistry()
+	ops.MustRegister(component, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdmin()))
+	s.SetReady(true)
+	h := s.Handler()
+
+	for _, path := range []string{
+		"/readyz",
+		"/admin/components",
+		"/admin/components/operational",
+	} {
+		rec := performRequest(t, h, http.MethodGet, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
+	}
+
+	if got := component.statusCalls.Load(); got == 0 {
+		t.Fatal("passive Status was not called")
+	}
+	if got := component.inspectCalls.Load(); got == 0 {
+		t.Fatal("passive Inspect was not called")
+	}
+	if got := component.checkCalls.Load(); got != 0 {
+		t.Fatalf("active Check called %d times, want 0", got)
+	}
+	if got := component.checkAllCalls.Load(); got != 0 {
+		t.Fatalf("active CheckAll called %d times, want 0", got)
+	}
+	if got := component.checkDescriptorCalls.Load(); got != 0 {
+		t.Fatalf("Checks descriptor method called %d times, want 0", got)
+	}
+	if got := component.commandCalls.Load(); got != 0 {
+		t.Fatalf("active HandleCommand called %d times, want 0", got)
+	}
+	if got := component.commandDescriptorCalls.Load(); got != 0 {
+		t.Fatalf("Commands descriptor method called %d times, want 0", got)
+	}
+}
+
+func TestServerHandlerOpskitAdminSnapshotHonorsConfiguredTimeout(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opsBlockingStatusComponent{}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(
+		ops,
+		servekit.WithOpsAdmin(),
+		servekit.WithOpsTimeout(10*time.Millisecond),
+	))
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components/slow")
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("/admin/components/slow status = %d, want %d", rec.Code, http.StatusGatewayTimeout)
+	}
+	assertJSONBodyField(t, rec.Body.Bytes(), "error", "request timed out")
+}
+
 func TestServerHandlerHealthEndpointMountedOnlyWhenConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -812,6 +877,66 @@ func (c opsInspectionComponent) Status(context.Context) opskit.Status {
 
 func (c opsInspectionComponent) Inspect(context.Context) (opskit.Inspection, error) {
 	return c.inspection, nil
+}
+
+type opsActiveCapabilityComponent struct {
+	statusCalls            atomic.Int32
+	inspectCalls           atomic.Int32
+	checkCalls             atomic.Int32
+	checkAllCalls          atomic.Int32
+	checkDescriptorCalls   atomic.Int32
+	commandCalls           atomic.Int32
+	commandDescriptorCalls atomic.Int32
+}
+
+func (*opsActiveCapabilityComponent) ComponentInfo() opskit.ComponentInfo {
+	return opskit.ComponentInfo{Name: "operational", Kind: "test"}
+}
+
+func (c *opsActiveCapabilityComponent) Status(context.Context) opskit.Status {
+	c.statusCalls.Add(1)
+	return opskit.ReadyStatus("ready")
+}
+
+func (c *opsActiveCapabilityComponent) Inspect(context.Context) (opskit.Inspection, error) {
+	c.inspectCalls.Add(1)
+	return opskit.Inspection{Summary: "safe inspection"}, nil
+}
+
+func (c *opsActiveCapabilityComponent) Check(context.Context) opskit.CheckResult {
+	c.checkCalls.Add(1)
+	return opskit.ReadyCheck("check ran", 0)
+}
+
+func (c *opsActiveCapabilityComponent) CheckAll(context.Context) opskit.CheckSummary {
+	c.checkAllCalls.Add(1)
+	return opskit.CheckSummary{State: opskit.StateReady, Ready: true}
+}
+
+func (c *opsActiveCapabilityComponent) Checks(context.Context) []opskit.CheckDescriptor {
+	c.checkDescriptorCalls.Add(1)
+	return []opskit.CheckDescriptor{{Name: "active-check"}}
+}
+
+func (c *opsActiveCapabilityComponent) HandleCommand(context.Context, opskit.CommandRequest) opskit.CommandResult {
+	c.commandCalls.Add(1)
+	return opskit.RejectedCommand("command should not run")
+}
+
+func (c *opsActiveCapabilityComponent) Commands(context.Context) []opskit.CommandDescriptor {
+	c.commandDescriptorCalls.Add(1)
+	return []opskit.CommandDescriptor{{Name: "active-command"}}
+}
+
+type opsBlockingStatusComponent struct{}
+
+func (opsBlockingStatusComponent) ComponentInfo() opskit.ComponentInfo {
+	return opskit.ComponentInfo{Name: "slow", Kind: "test"}
+}
+
+func (opsBlockingStatusComponent) Status(ctx context.Context) opskit.Status {
+	<-ctx.Done()
+	return opskit.UnknownStatus("status evaluation canceled")
 }
 
 func reserveLoopbackAddr(t *testing.T) string {

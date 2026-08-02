@@ -152,10 +152,10 @@ func validateRoute(method, path string) {
 	}
 }
 
-// ReadinessCheck is invoked by the built-in /readyz endpoint.
-//
-// Returning nil marks the dependency healthy. Returning an error marks the
-// service not ready and includes the error text in the response payload.
+// ReadinessCheck is a lightweight readiness predicate over local or cached
+// state. Returning nil allows readiness to proceed. Returning an error marks
+// the service not ready and includes the error text in the response payload.
+// Active dependency checks should run outside the HTTP probe path.
 type ReadinessCheck func(context.Context) error
 
 // HTTPError carries an HTTP status code alongside an underlying error.

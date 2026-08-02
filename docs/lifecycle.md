@@ -40,25 +40,46 @@ Default behavior:
 - before readiness is true, `/readyz` returns `503 Service Unavailable`
 - once the server is ready, `/readyz` returns `200 OK`
 - if `WithOps(...)` is configured and Opskit readiness is not ready, `/readyz` returns `503 Service Unavailable` with Opskit readiness details
-- if readiness checks fail, `/readyz` returns `503 Service Unavailable` with a `reason`
+- if a standalone readiness predicate fails, `/readyz` returns `503 Service Unavailable` with a `reason`
 
 ## Opskit readiness
 
 Use `WithOps(...)` when your service has an Opskit registry that represents component readiness.
 
+For composed Kit Series services, this is the primary readiness path. The
+application registers components from sibling kits in one Opskit registry and
+Servekit receives only that registry; it does not integrate with individual
+domain kits directly. See [Kit Series Composition](composition.md).
+
 Servekit still owns the HTTP probe and lifecycle gate. When `WithOps(...)` is configured, `/readyz` evaluates readiness in this order:
 
 1. Servekit lifecycle readiness: startup, shutdown, drain delay, and explicit `SetReady(...)`.
 2. Opskit registry readiness.
-3. `WithReadinessChecks(...)` checks.
+3. `WithReadinessChecks(...)` predicates.
 
 Opskit readiness is only evaluated after Servekit's own readiness is true. That keeps shutdown, drain delay, and explicit `SetReady(...)` behavior authoritative at the HTTP service layer.
 
-Opskit readiness and component snapshot reads use a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe or snapshot budget.
+Opskit readiness and component snapshot reads receive a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe or snapshot budget. This supplies a deadline but cannot force a component method to return when that implementation ignores context cancellation.
+
+When Opskit is not ready, the response includes its aggregate readiness view:
+
+```json
+{
+  "status": "not_ready",
+  "reason": "one or more readiness components are not ready",
+  "readiness": {
+    "ready": false,
+    "reason": "one or more readiness components are not ready"
+  }
+}
+```
+
+Readiness reasons and component details must be safe for the audience that can
+reach `/readyz`.
 
 ## Readiness checks
 
-Use `WithReadinessChecks(...)` to append dependency checks that `/readyz` runs once the server is otherwise marked ready.
+Use `WithReadinessChecks(...)` to append lightweight readiness predicates that `/readyz` evaluates once the server is otherwise marked ready.
 
 Each `ReadinessCheck` returns:
 
@@ -67,7 +88,7 @@ Each `ReadinessCheck` returns:
 
 If any check fails, Servekit reports the service as not ready and includes the error text in the JSON response.
 
-`WithReadinessChecks(...)` remains the standalone readiness hook for services that do not need an Opskit registry. When `WithOps(...)` is configured, these checks run after Opskit readiness succeeds. For composed Kit Series services, prefer cached component readiness through Opskit and run expensive active dependency checks outside the probe path.
+`WithReadinessChecks(...)` remains the standalone readiness hook for small services that do not need an Opskit registry. When `WithOps(...)` is configured, these predicates run after Opskit readiness succeeds. They should read fast local or cached state; they should not perform network probes or expensive active work. For composed Kit Series services, prefer cached component readiness through Opskit and run active dependency checks outside the probe path.
 
 ## `SetReady`
 
@@ -122,6 +143,11 @@ If your service wants a richer application-specific health endpoint, supply one 
 
 These routes present passive Opskit state only. Servekit does not run checks, dispatch commands, or execute other active Opskit capabilities.
 
+The component snapshot route may evaluate the component's `Status`,
+`Readiness`, and `Inspect` methods. Those methods are passive by contract and
+should return local or cached operational state. Inspection results and errors
+must be safe to serialize to the admin audience.
+
 These routes are controlled by `WithOpsAdmin()`, not by `WithDefaultEndpointsEnabled(...)`.
 
 Opskit admin routes are not authenticated by default. Production services should protect them with `WithOpsAdminAuthGate(...)` or equivalent network-level controls.
@@ -141,9 +167,13 @@ In that setup:
 
 ## Examples
 
+See [`examples/operations`](../examples/operations) for the primary composed
+service path using Opskit-backed readiness, authenticated component inventory,
+and component snapshots without importing any domain kit.
+
 See [`examples/readiness`](../examples/readiness) for a runnable example that combines:
 
-- explicit dependency readiness checks
+- standalone local readiness predicates for a service without Opskit
 - a custom `/healthz`
 - drain delay on shutdown
 - a slow endpoint that respects request cancellation

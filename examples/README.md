@@ -8,27 +8,30 @@ Use this page when you want the short version: what examples exist, what each on
 
 If you want the fuller narrative walkthrough, start with the [Examples Guide](../docs/examples.md).
 
-Read the examples as a progression from the normal Servekit path outward into telemetry, route-level controls, customization, and advanced integration.
+Read the examples as a progression from the normal Servekit path through the shared Opskit composition model, then outward into telemetry, route-level controls, customization, and advanced integration.
 
 ## Read Order
 
 1. [basic](basic)
-2. [telemetry](telemetry)
-3. [endpoint-controls](endpoint-controls)
-4. [custom-encoding](custom-encoding)
-5. [readiness](readiness)
-6. [logging](logging)
-7. [cors](cors)
-8. [external-server](external-server)
-9. [advanced-composition](advanced-composition)
-10. [streaming](streaming)
-11. [reverse-proxy](reverse-proxy)
-12. [response-capture](response-capture)
+2. [operations](operations)
+3. [telemetry](telemetry)
+4. [endpoint-controls](endpoint-controls)
+5. [custom-encoding](custom-encoding)
+6. [readiness](readiness)
+7. [logging](logging)
+8. [cors](cors)
+9. [external-server](external-server)
+10. [advanced-composition](advanced-composition)
+11. [streaming](streaming)
+12. [reverse-proxy](reverse-proxy)
+13. [response-capture](response-capture)
 
 ## What Each Example Shows
 
 - [basic](basic)
   The core off-the-shelf story: one small business route plus `New`, `Handle`, `Run`, built-in probes, JSON encoding, IDs, access logs, panic recovery, and visible OpenTelemetry tracing through the global provider.
+- [operations](operations)
+  The primary Kit Series composition story: one shared Opskit registry, required and informational components, Opskit-backed readiness, authenticated component inventory, and passive component snapshots without any domain-kit-specific Servekit integration.
 - [telemetry](telemetry)
   The focused OpenTelemetry story: global tracer and meter providers, request spans, request metrics, and `Run(...)`-path connection metrics without any Servekit-specific telemetry options.
 - [endpoint-controls](endpoint-controls)
@@ -36,7 +39,7 @@ Read the examples as a progression from the normal Servekit path outward into te
 - [custom-encoding](custom-encoding)
   Global and per-endpoint response contract customization with `WithResponseEncoder(...)`, `WithErrorEncoder(...)`, and `WithEndpointResponseEncoder(...)`.
 - [readiness](readiness)
-  Built-in readiness, custom `/healthz`, warmup sequencing, and shutdown drain delay.
+  The standalone path for a small service without Opskit: a local readiness predicate, custom `/healthz`, warmup sequencing, and shutdown drain delay.
 - [logging](logging)
   Custom `slog` setup, `http.Server.ErrorLog` wiring, request IDs, and panic recovery behavior.
 - [cors](cors)
@@ -54,9 +57,10 @@ Read the examples as a progression from the normal Servekit path outward into te
 
 ## Why This Structure Exists
 
-The examples are intentionally organized to answer four reader questions:
+The examples are intentionally organized to answer five reader questions:
 
 - "What is the shortest useful Servekit service?"
+- "How does Servekit present a composed service without depending on domain kits?"
 - "What observability do I get by default?"
 - "How do I change one route without changing the whole server?"
 - "Does the raw HTTP escape hatch still behave credibly for advanced use cases?"
@@ -72,6 +76,7 @@ go run ./examples/<name>
 
 # for example
 go run ./examples/basic
+go run ./examples/operations
 go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/advanced-composition
