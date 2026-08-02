@@ -13,9 +13,9 @@ import (
 	servekit "github.com/jaredjakacky/servekit"
 )
 
-// The readiness example focuses on startup sequencing, readiness checks,
-// custom health reporting, and graceful shutdown behavior. Read it when a
-// service should not report ready immediately on process start.
+// The readiness example focuses on the standalone lifecycle path for a small
+// service without an Opskit registry: startup sequencing, a lightweight local
+// readiness predicate, custom health reporting, and graceful shutdown.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -35,6 +35,8 @@ func main() {
 		servekit.WithAddr(":8081"),
 		servekit.WithShutdownDrainDelay(5*time.Second),
 		servekit.WithShutdownTimeout(20*time.Second),
+		// Read only local cached state here. Active dependency checks should run
+		// outside the HTTP probe path and publish their latest result through Opskit.
 		servekit.WithReadinessChecks(func(ctx context.Context) error {
 			if !cacheWarmed.Load() {
 				return errors.New("cache not warmed")

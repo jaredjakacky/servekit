@@ -106,6 +106,35 @@ By default, panic recovery logs the panic and stack trace, returns a best-effort
 
 In practice, you get a real HTTP baseline without hand-building the `http.Server` lifecycle, middleware stack, probes, IDs, telemetry, and default request/response behavior yourself.
 
+## Kit Series Composition
+
+When a service is composed from several Kit Series packages, use one Opskit
+registry as the shared operational read model and let Servekit present it:
+
+```go
+ops := opskit.NewRegistry()
+
+// The application registers Opskit components produced by sibling kits or by
+// application code. Servekit does not depend on those packages directly.
+ops.MustRegister(component, opskit.Required())
+
+s := servekit.New(
+	servekit.WithOps(
+		ops,
+		servekit.WithOpsAdmin(),
+		servekit.WithOpsAdminAuthGate(requireAdmin),
+	),
+)
+```
+
+`GET /readyz` combines Servekit lifecycle readiness with Opskit registry
+readiness. The opt-in `GET /admin/components` and
+`GET /admin/components/{name}` routes present passive inventory and snapshots.
+Servekit does not run checks or dispatch commands through those routes.
+
+See [Kit Series Composition](docs/composition.md) for the ownership model and
+[`examples/operations`](examples/operations) for a runnable generic example.
+
 ## The Core Model
 
 Servekit is deliberately built around one normal path and one escape hatch.
@@ -175,6 +204,7 @@ Servekit has a short normal path, but it is not boxed into only the defaults. Ad
 - integration with an existing `http.ServeMux`
 - mounting `Handler()` into your own `http.Server`
 - explicit readiness control with `SetReady(...)`
+- passive Opskit readiness and component admin presentation
 - custom `slog` and `http.Server.ErrorLog` wiring
 - CORS configuration
 - OpenTelemetry provider, propagator, and labeling customization
@@ -186,6 +216,7 @@ The advanced path is documented in [docs/advanced.md](docs/advanced.md), includi
 
 - [Getting Started](docs/getting-started.md): first service, first run, first curl
 - [Usage Guide](docs/usage.md): the normal path, default behavior, and recommended adoption flow
+- [Kit Series Composition](docs/composition.md): Opskit-backed readiness and generic component admin presentation
 - [Advanced Guide](docs/advanced.md): custom encoders, composition patterns, external server ownership, telemetry customization, and other advanced hooks
 - [Lifecycle and Probes](docs/lifecycle.md): readiness, `/livez`, `/readyz`, `/healthz`, and shutdown
 - [Observability and Middleware](docs/observability.md): IDs, access logs, panic recovery, OpenTelemetry, and CORS
@@ -200,17 +231,18 @@ Runnable programs live in [`examples/`](examples), which includes a guided tour 
 Recommended reading order:
 
 1. [`examples/basic`](examples/basic)
-2. [`examples/telemetry`](examples/telemetry)
-3. [`examples/endpoint-controls`](examples/endpoint-controls)
-4. [`examples/custom-encoding`](examples/custom-encoding)
-5. [`examples/readiness`](examples/readiness)
-6. [`examples/logging`](examples/logging)
-7. [`examples/cors`](examples/cors)
-8. [`examples/external-server`](examples/external-server)
-9. [`examples/advanced-composition`](examples/advanced-composition)
-10. [`examples/streaming`](examples/streaming)
-11. [`examples/reverse-proxy`](examples/reverse-proxy)
-12. [`examples/response-capture`](examples/response-capture)
+2. [`examples/operations`](examples/operations)
+3. [`examples/telemetry`](examples/telemetry)
+4. [`examples/endpoint-controls`](examples/endpoint-controls)
+5. [`examples/custom-encoding`](examples/custom-encoding)
+6. [`examples/readiness`](examples/readiness)
+7. [`examples/logging`](examples/logging)
+8. [`examples/cors`](examples/cors)
+9. [`examples/external-server`](examples/external-server)
+10. [`examples/advanced-composition`](examples/advanced-composition)
+11. [`examples/streaming`](examples/streaming)
+12. [`examples/reverse-proxy`](examples/reverse-proxy)
+13. [`examples/response-capture`](examples/response-capture)
 
 ## API Reference
 

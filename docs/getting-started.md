@@ -88,6 +88,11 @@ Expected behavior:
 - handled requests also emit a structured access log entry by default
 - if the application installs a global OpenTelemetry provider, Servekit emits request spans automatically
 
+When the service grows into a composition of multiple Kit Series packages, use
+one shared Opskit registry for component readiness and admin presentation. See
+[Kit Series Composition](composition.md) and the runnable
+[`examples/operations`](../examples/operations) example.
+
 ## What you get from `New()`
 
 A fresh `servekit.New()` server starts with:

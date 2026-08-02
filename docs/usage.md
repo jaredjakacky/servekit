@@ -160,6 +160,11 @@ If you supply `WithHealthHandler(...)`, it also mounts:
 
 - `GET /healthz`
 
+For a composed Kit Series service, pass the shared Opskit registry with
+`WithOps(...)`. Then `/readyz` includes Opskit readiness, and
+`WithOpsAdmin()` can expose generic read-only component inventory and snapshots.
+See [Kit Series Composition](composition.md).
+
 Disable the whole default operational set with `WithDefaultEndpointsEnabled(false)`.
 
 ### Routing model
@@ -265,6 +270,7 @@ The most important server-wide hooks are:
 - `WithErrorEncoder(...)`
 - `WithBuildInfo(...)`
 - `WithHealthHandler(...)`
+- `WithOps(...)`
 - `WithReadinessChecks(...)`
 - `WithCORSConfig(...)`
 - timeout and size options such as `WithReadTimeout(...)` and `WithMaxHeaderBytes(...)`
@@ -278,14 +284,16 @@ Use server-level options when the behavior is truly shared. Prefer endpoint opti
 If you are introducing Servekit into a service, the cleanest progression is:
 
 1. start with `New`, `Handle`, and `Run`
-2. keep the default JSON encoders unless you have a concrete response contract to enforce
-3. use endpoint options for outlier routes instead of immediately replacing global behavior
-4. treat `HandleHTTP` as an intentional escape hatch, not as the default style
-5. move to the advanced guide only when the service genuinely needs custom encoders, external server ownership, or deeper telemetry control
+2. when composing Kit Series packages, register their Opskit components in one registry and pass it with `WithOps(...)`
+3. keep the default JSON encoders unless you have a concrete response contract to enforce
+4. use endpoint options for outlier routes instead of immediately replacing global behavior
+5. treat `HandleHTTP` as an intentional escape hatch, not as the default style
+6. move to the advanced guide only when the service genuinely needs custom encoders, external server ownership, or deeper telemetry control
 
 ## Related guides
 
 - [Getting Started](getting-started.md)
+- [Kit Series Composition](composition.md)
 - [Advanced Guide](advanced.md)
 - [Lifecycle and Probes](lifecycle.md)
 - [Observability and Middleware](observability.md)

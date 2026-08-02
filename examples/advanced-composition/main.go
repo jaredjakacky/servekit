@@ -53,6 +53,8 @@ func main() {
 			ExposedHeaders: []string{"X-Request-ID"},
 			MaxAge:         300,
 		}),
+		// This intentionally demonstrates the standalone local predicate hook.
+		// Cross-kit services should normally aggregate readiness through Opskit.
 		servekit.WithReadinessChecks(func(ctx context.Context) error {
 			if !warmed.Load() {
 				return errors.New("startup warmup incomplete")
