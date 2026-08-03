@@ -189,14 +189,16 @@ func otelTracingMiddleware(obs observabilityConfig) Middleware {
 					}
 				}
 				rec := recover()
-				status := completedStatusCode(rw, rec != nil)
-				span.SetAttributes(semconv.HTTPResponseStatusCode(status))
+				status, statusKnown := completedStatusCode(rw, rec != nil)
+				if statusKnown {
+					span.SetAttributes(semconv.HTTPResponseStatusCode(status))
+				}
 				if rec != nil {
 					span.RecordError(fmt.Errorf("panic: %v", rec))
 					span.SetStatus(codes.Error, "panic")
 					panic(rec)
 				}
-				if status >= http.StatusInternalServerError {
+				if statusKnown && status >= http.StatusInternalServerError {
 					span.SetStatus(codes.Error, http.StatusText(status))
 				}
 			}()
@@ -338,10 +340,12 @@ func (m otelMetrics) middleware() Middleware {
 			defer m.inFlight.Add(r.Context(), -1, metric.WithAttributes(base...))
 			defer func() {
 				rec := recover()
-				status := completedStatusCode(rw, rec != nil)
+				status, statusKnown := completedStatusCode(rw, rec != nil)
 				finalRoute := m.routeExtractor(r)
 				attrs := metricAttributes(r, finalRoute, m.customAttrs)
-				attrs = append(attrs, semconv.HTTPResponseStatusCode(status))
+				if statusKnown {
+					attrs = append(attrs, semconv.HTTPResponseStatusCode(status))
+				}
 				if rec != nil && m.enablePanics {
 					m.panicCount.Add(r.Context(), 1, metric.WithAttributes(attrs...))
 				}

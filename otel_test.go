@@ -436,6 +436,44 @@ func TestServerOpenTelemetryRunPathTracksHijackedConnections(t *testing.T) {
 	}
 }
 
+func TestServerOpenTelemetryDoesNotInventStatusForHijackedResponse(t *testing.T) {
+	t.Parallel()
+
+	tp := newRecordingTracerProvider()
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(
+		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
+	)
+	s.HandleHTTP(http.MethodGet, "/hijack", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Fatalf("Hijack() error = %v", err)
+		}
+		_ = conn.Close()
+	}))
+
+	writer := newHijackRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/hijack", nil)
+	s.Handler().ServeHTTP(writer, req)
+
+	spans := tp.Spans()
+	if len(spans) != 1 {
+		t.Fatalf("recorded spans = %d, want 1", len(spans))
+	}
+	if got := spans[0].AttributeValue(string(semconv.HTTPResponseStatusCodeKey)); got != nil {
+		t.Fatalf("span http.response.status_code = %v, want omitted for unobserved hijacked response", got)
+	}
+
+	measurements := mp.int64Measurements("http.server.request.count")
+	if len(measurements) != 1 {
+		t.Fatalf("request count measurements = %d, want 1", len(measurements))
+	}
+	if got := measurements[0].AttributeValue(string(semconv.HTTPResponseStatusCodeKey)); got != nil {
+		t.Fatalf("metric http.response.status_code = %v, want omitted for unobserved hijacked response", got)
+	}
+}
+
 func newOTelTestServer(opts ...servekit.Option) *servekit.Server {
 	base := []servekit.Option{
 		servekit.WithDefaultEndpointsEnabled(false),

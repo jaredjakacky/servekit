@@ -55,6 +55,56 @@ func TestRequestIDMiddleware(t *testing.T) {
 			t.Fatalf("body = %q, want generated request id %q", rec.Body.String(), got)
 		}
 	})
+
+	t.Run("replaces unsafe incoming request id", func(t *testing.T) {
+		t.Parallel()
+
+		unsafeIDs := []string{
+			"request id with spaces",
+			"request\tid",
+			"réquest-id",
+			strings.Repeat("a", 129),
+		}
+		for _, unsafeID := range unsafeIDs {
+			unsafeID := unsafeID
+			t.Run(unsafeID, func(t *testing.T) {
+				handler := servekit.RequestID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = io.WriteString(w, servekit.RequestIDFromContext(r.Context()))
+				}))
+
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req.Header.Set("X-Request-ID", unsafeID)
+				handler.ServeHTTP(rec, req)
+
+				got := rec.Header().Get("X-Request-ID")
+				if got == "" || got == unsafeID {
+					t.Fatalf("X-Request-ID = %q, want a fresh generated value", got)
+				}
+				if rec.Body.String() != got {
+					t.Fatalf("body = %q, want generated request id %q", rec.Body.String(), got)
+				}
+			})
+		}
+	})
+
+	t.Run("accepts common proxy tracing format", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "Root=1-67891233-abcdef012345678912345678;Parent=53995c3f42cd8ad8;Sampled=1"
+		handler := servekit.RequestID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, servekit.RequestIDFromContext(r.Context()))
+		}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-ID", id)
+		handler.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("X-Request-ID"); got != id {
+			t.Fatalf("X-Request-ID = %q, want %q", got, id)
+		}
+	})
 }
 
 func TestCorrelationIDMiddleware(t *testing.T) {
@@ -97,6 +147,27 @@ func TestCorrelationIDMiddleware(t *testing.T) {
 		}
 		if got := rec.Body.String(); got != "req-123|req-123" {
 			t.Fatalf("body = %q, want %q", got, "req-123|req-123")
+		}
+	})
+
+	t.Run("invalid correlation id falls back to validated request id", func(t *testing.T) {
+		t.Parallel()
+
+		handler := servekit.RequestID()(servekit.CorrelationID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, servekit.CorrelationIDFromContext(r.Context()))
+		})))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-ID", "req-123")
+		req.Header.Set("X-Correlation-ID", strings.Repeat("x", 129))
+		handler.ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("X-Correlation-ID"); got != "req-123" {
+			t.Fatalf("X-Correlation-ID = %q, want validated request ID fallback", got)
+		}
+		if got := rec.Body.String(); got != "req-123" {
+			t.Fatalf("body = %q, want %q", got, "req-123")
 		}
 	})
 }

@@ -3,6 +3,7 @@ package servekit_test
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -102,10 +103,85 @@ func TestHandleHTTPPreservesFlusherCapability(t *testing.T) {
 	}
 }
 
+func TestHandleHTTPFlushBeforeWriteHeaderCommitsImplicitOK(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	s := newResponseCaptureServer(&logs)
+	s.HandleHTTP(http.MethodGet, "/flush", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+	}))
+
+	rec := newFlushRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/flush", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.writeHeaderCalls != 1 {
+		t.Fatalf("WriteHeader call count = %d, want 1", rec.writeHeaderCalls)
+	}
+	if rec.flushCalls != 1 {
+		t.Fatalf("Flush call count = %d, want 1", rec.flushCalls)
+	}
+	if got := logs.String(); !strings.Contains(got, "status=200") {
+		t.Fatalf("logs = %q, want status=200", got)
+	}
+}
+
+func TestRecoveryDoesNotWriteFallbackAfterFlush(t *testing.T) {
+	t.Parallel()
+
+	handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		panic("boom")
+	}))
+
+	rec := newFlushRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/flush-panic", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.writeHeaderCalls != 1 {
+		t.Fatalf("WriteHeader call count = %d, want 1", rec.writeHeaderCalls)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body = %q, want no recovery fallback after Flush", rec.Body.String())
+	}
+}
+
+func TestResponseControllerFlushPreservesUnderlyingError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("flush failed")
+	rec := newFlushRecorder()
+	rec.flushErr = wantErr
+
+	var gotErr error
+	s := newResponseCaptureServer(io.Discard)
+	s.HandleHTTP(http.MethodGet, "/flush-error", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotErr = http.NewResponseController(w).Flush()
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/flush-error", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if !errors.Is(gotErr, wantErr) {
+		t.Fatalf("ResponseController.Flush error = %v, want %v", gotErr, wantErr)
+	}
+	if rec.writeHeaderCalls != 1 || rec.Code != http.StatusOK {
+		t.Fatalf("WriteHeader calls/status = %d/%d, want 1/%d", rec.writeHeaderCalls, rec.Code, http.StatusOK)
+	}
+}
+
 func TestHandleHTTPPreservesHijackerCapability(t *testing.T) {
 	t.Parallel()
 
-	s := newResponseCaptureServer(io.Discard)
+	var logs bytes.Buffer
+	s := newResponseCaptureServer(&logs)
 	s.HandleHTTP(http.MethodGet, "/hijack", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
@@ -136,6 +212,87 @@ func TestHandleHTTPPreservesHijackerCapability(t *testing.T) {
 	}
 	if got := writer.hijackedOutput.String(); !strings.Contains(got, "HTTP/1.1 200 OK") || !strings.Contains(got, "hijacked") {
 		t.Fatalf("hijacked output = %q, want raw HTTP response containing status line and body", got)
+	}
+	logText := logs.String()
+	if !strings.Contains(logText, "hijacked=true") {
+		t.Fatalf("logs = %q, want hijacked=true", logText)
+	}
+	if strings.Contains(logText, "status=") {
+		t.Fatalf("logs = %q, want no invented status for an unobserved raw response", logText)
+	}
+}
+
+func TestRecoveryDoesNotWriteFallbackAfterSuccessfulHijack(t *testing.T) {
+	t.Parallel()
+
+	handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Fatalf("Hijack() error = %v", err)
+		}
+		defer conn.Close()
+		panic("boom")
+	}))
+
+	writer := newHijackRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/hijack-panic", nil)
+	handler.ServeHTTP(writer, req)
+
+	if !writer.hijacked {
+		t.Fatal("Hijack() was not called")
+	}
+	if writer.writeHeaderCalls != 0 {
+		t.Fatalf("WriteHeader call count = %d, want 0 after successful Hijack", writer.writeHeaderCalls)
+	}
+	if writer.writeCalls != 0 {
+		t.Fatalf("Write call count = %d, want 0 after successful Hijack", writer.writeCalls)
+	}
+}
+
+func TestRecoveryWritesFallbackAfterFailedHijack(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("hijack failed")
+	handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, err := w.(http.Hijacker).Hijack(); !errors.Is(err, wantErr) {
+			t.Fatalf("Hijack() error = %v, want %v", err, wantErr)
+		}
+		panic("boom")
+	}))
+
+	writer := newHijackRecorder()
+	writer.hijackErr = wantErr
+	req := httptest.NewRequest(http.MethodGet, "/hijack-failed", nil)
+	handler.ServeHTTP(writer, req)
+
+	if writer.hijacked {
+		t.Fatal("writer marked hijacked after failed Hijack")
+	}
+	if writer.writeHeaderCalls != 1 {
+		t.Fatalf("WriteHeader call count = %d, want recovery fallback", writer.writeHeaderCalls)
+	}
+	if writer.writeCalls != 1 {
+		t.Fatalf("Write call count = %d, want recovery fallback", writer.writeCalls)
+	}
+}
+
+func TestRecoveryCanWriteFinalErrorAfterInformationalResponse(t *testing.T) {
+	t.Parallel()
+
+	handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusEarlyHints)
+		panic("boom")
+	}))
+
+	writer := &multiStatusRecorder{header: make(http.Header)}
+	req := httptest.NewRequest(http.MethodGet, "/early-hints-panic", nil)
+	handler.ServeHTTP(writer, req)
+
+	if len(writer.statuses) != 2 || writer.statuses[0] != http.StatusEarlyHints || writer.statuses[1] != http.StatusInternalServerError {
+		t.Fatalf("statuses = %v, want [%d %d]", writer.statuses, http.StatusEarlyHints, http.StatusInternalServerError)
+	}
+	if !strings.Contains(writer.body.String(), "internal server error") {
+		t.Fatalf("body = %q, want recovery fallback", writer.body.String())
 	}
 }
 
@@ -190,7 +347,9 @@ func newResponseCaptureServer(logOutput io.Writer) *servekit.Server {
 
 type flushRecorder struct {
 	*httptest.ResponseRecorder
-	flushCalls int
+	flushCalls       int
+	writeHeaderCalls int
+	flushErr         error
 }
 
 func newFlushRecorder() *flushRecorder {
@@ -201,10 +360,23 @@ func (r *flushRecorder) Flush() {
 	r.flushCalls++
 }
 
+func (r *flushRecorder) FlushError() error {
+	r.flushCalls++
+	return r.flushErr
+}
+
+func (r *flushRecorder) WriteHeader(code int) {
+	r.writeHeaderCalls++
+	r.ResponseRecorder.WriteHeader(code)
+}
+
 type hijackRecorder struct {
-	header         http.Header
-	hijacked       bool
-	hijackedOutput bytes.Buffer
+	header           http.Header
+	hijacked         bool
+	hijackedOutput   bytes.Buffer
+	hijackErr        error
+	writeHeaderCalls int
+	writeCalls       int
 }
 
 func newHijackRecorder() *hijackRecorder {
@@ -215,16 +387,38 @@ func (r *hijackRecorder) Header() http.Header {
 	return r.header
 }
 
-func (r *hijackRecorder) WriteHeader(statusCode int) {}
+func (r *hijackRecorder) WriteHeader(statusCode int) {
+	r.writeHeaderCalls++
+}
 
 func (r *hijackRecorder) Write(p []byte) (int, error) {
+	r.writeCalls++
 	return len(p), nil
 }
 
 func (r *hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if r.hijackErr != nil {
+		return nil, nil, r.hijackErr
+	}
 	r.hijacked = true
 	rw := bufio.NewReadWriter(bufio.NewReader(strings.NewReader("")), bufio.NewWriter(&r.hijackedOutput))
 	return stubConn{}, rw, nil
+}
+
+type multiStatusRecorder struct {
+	header   http.Header
+	statuses []int
+	body     bytes.Buffer
+}
+
+func (r *multiStatusRecorder) Header() http.Header { return r.header }
+
+func (r *multiStatusRecorder) WriteHeader(code int) {
+	r.statuses = append(r.statuses, code)
+}
+
+func (r *multiStatusRecorder) Write(p []byte) (int, error) {
+	return r.body.Write(p)
 }
 
 type stubConn struct{}

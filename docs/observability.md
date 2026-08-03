@@ -10,9 +10,14 @@ A new server gets request IDs, correlation IDs, access logs, panic recovery, req
 
 Behavior:
 
-- if the incoming request already has `X-Request-ID`, Servekit preserves it
+- if the incoming request has a valid `X-Request-ID`, Servekit preserves it
 - otherwise Servekit generates one
 - the value is also attached to the request context
+
+Inbound IDs must be 1–128 visible ASCII characters. Invalid or oversized
+values are replaced before they reach response headers, context, or built-in
+logs. This accepts common UUID, hex, trace, and proxy-generated token formats
+without treating arbitrary header content as an identifier.
 
 Use `RequestIDFromContext(ctx)` when application code or custom middleware needs that value.
 
@@ -22,9 +27,11 @@ Use `RequestIDFromContext(ctx)` when application code or custom middleware needs
 
 Behavior:
 
-- if the incoming request already has `X-Correlation-ID`, Servekit preserves it
+- if the incoming request has a valid `X-Correlation-ID`, Servekit preserves it
 - otherwise it reuses the request ID when present
 - if neither header exists, it generates a new value
+
+Correlation IDs use the same fixed 1–128 visible-ASCII rule as request IDs.
 
 Use `CorrelationIDFromContext(ctx)` when application code needs the correlation ID from request context.
 
@@ -36,7 +43,8 @@ By default Servekit enables this middleware with the server logger. Logged field
 
 - method
 - path
-- status
+- status, when Servekit observed a normal HTTP response status
+- `hijacked=true` when the handler successfully took over the connection
 - response bytes
 - duration
 - matched route
@@ -48,6 +56,13 @@ By default Servekit enables this middleware with the server logger. Logged field
 Disable it globally with `WithAccessLogEnabled(false)` or skip it per endpoint with `WithSkipAccessLog()`.
 
 Recovered panic requests still flow through access logs and metrics. If no response headers were committed before the panic, they are reported as `500`. If the handler had already committed a status or body bytes, Servekit keeps the already-observed status because outer recovery cannot safely rewrite the response after that point.
+
+After a successful hijack, bytes and status written directly to the raw
+connection are outside `ResponseWriter` observation. Access logs mark the
+request as hijacked and omit status when no final HTTP status was observed;
+spans and metrics likewise omit `http.response.status_code` rather than invent
+one. Other request, panic, duration, and connection telemetry remains
+best-effort.
 
 ## Panic recovery
 
@@ -227,8 +242,11 @@ The wrapper tracks:
 Important details:
 
 - the observed status starts at `200` to match `net/http`'s implicit success behavior
+- flushing before a final status records the implicit `200` commitment used by `net/http`
+- informational 1xx responses other than 101 do not commit the final response
 - the observed byte count is response-body bytes, not wire-level network traffic
-- bytes written after a successful hijack are outside normal `ResponseWriter` observation
+- a successful hijack is terminal for recovery even when no normal HTTP status was observed
+- bytes and raw status lines written after a successful hijack are outside normal `ResponseWriter` observation
 
 The more important reason this wrapper exists is capability preservation. If the underlying writer supports `http.Flusher`, `http.Hijacker`, or `io.ReaderFrom`, Servekit preserves those capabilities so `HandleHTTP(...)` remains a credible raw escape hatch rather than a partially broken one.
 

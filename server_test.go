@@ -84,7 +84,7 @@ func TestServerHandlerReadyzIncludesReadinessCheckFailureReason(t *testing.T) {
 	assertJSONField(t, rec, "reason", "database unavailable")
 }
 
-func TestServerHandlerReadyzIncludesOpskitReadiness(t *testing.T) {
+func TestServerHandlerReadyzOmitsOpskitComponentDetails(t *testing.T) {
 	t.Parallel()
 
 	ops := opskit.NewRegistry()
@@ -111,6 +111,16 @@ func TestServerHandlerReadyzIncludesOpskitReadiness(t *testing.T) {
 	}
 	assertJSONField(t, rec, "status", "not_ready")
 	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more readiness components are not ready")
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode /readyz body: %v", err)
+	}
+	if _, ok := body["readiness"]; ok {
+		t.Fatalf("/readyz body = %s, want no detailed Opskit readiness object", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "payments") || strings.Contains(rec.Body.String(), "payments unavailable") {
+		t.Fatalf("/readyz body = %s, want no component identity or message", rec.Body.String())
+	}
 }
 
 func TestServerHandlerReadyzStillRequiresServekitLifecycleReadinessWithOpskit(t *testing.T) {
