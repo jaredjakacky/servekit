@@ -15,6 +15,12 @@ require (
 )
 
 require (
+	github.com/jaredjakacky/configkit v0.2.0 // examples/kit-series-composition
+	github.com/jaredjakacky/dependkit v0.3.0 // examples/kit-series-composition
+	github.com/jaredjakacky/workerkit v0.4.0 // examples/kit-series-composition
+)
+
+require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

@@ -59,8 +59,9 @@ import servekit "github.com/jaredjakacky/servekit"
 Servekit's root package depends on the OpenTelemetry API because HTTP tracing
 and metrics are part of its default server behavior and public configuration
 surface. The module also lists the OpenTelemetry SDK and stdout exporters for
-the repository's runnable telemetry example. Those example-only packages are
-not compiled or linked into applications that import only Servekit.
+the repository's runnable telemetry example, plus sibling Kit Series modules
+used by composition examples. Those example-only packages are not compiled or
+linked into applications that import only Servekit.
 
 ## Quick Start
 
@@ -138,8 +139,11 @@ readiness. The opt-in `GET /admin/components` and
 `GET /admin/components/{name}` routes present passive inventory and snapshots.
 Servekit does not run checks or dispatch commands through those routes.
 
-See [Kit Series Composition](docs/composition.md) for the ownership model and
-[`examples/operations`](examples/operations) for a runnable generic example.
+See [Kit Series Composition](docs/composition.md) for the ownership model,
+[`examples/operations`](examples/operations) for the smallest Servekit and
+Opskit path, and
+[`examples/kit-series-composition`](examples/kit-series-composition) for the
+canonical composition of the currently available kits.
 
 ## The Core Model
 
@@ -238,17 +242,18 @@ Recommended reading order:
 
 1. [`examples/basic`](examples/basic)
 2. [`examples/operations`](examples/operations)
-3. [`examples/telemetry`](examples/telemetry)
-4. [`examples/endpoint-controls`](examples/endpoint-controls)
-5. [`examples/custom-encoding`](examples/custom-encoding)
-6. [`examples/readiness`](examples/readiness)
-7. [`examples/logging`](examples/logging)
-8. [`examples/cors`](examples/cors)
-9. [`examples/external-server`](examples/external-server)
-10. [`examples/advanced-composition`](examples/advanced-composition)
-11. [`examples/streaming`](examples/streaming)
-12. [`examples/reverse-proxy`](examples/reverse-proxy)
-13. [`examples/response-capture`](examples/response-capture)
+3. [`examples/kit-series-composition`](examples/kit-series-composition)
+4. [`examples/telemetry`](examples/telemetry)
+5. [`examples/endpoint-controls`](examples/endpoint-controls)
+6. [`examples/custom-encoding`](examples/custom-encoding)
+7. [`examples/readiness`](examples/readiness)
+8. [`examples/logging`](examples/logging)
+9. [`examples/cors`](examples/cors)
+10. [`examples/external-server`](examples/external-server)
+11. [`examples/advanced-composition`](examples/advanced-composition)
+12. [`examples/streaming`](examples/streaming)
+13. [`examples/reverse-proxy`](examples/reverse-proxy)
+14. [`examples/response-capture`](examples/response-capture)
 
 ## API Reference
 

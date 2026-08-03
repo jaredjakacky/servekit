@@ -5,7 +5,6 @@ GOFMT ?= gofmt
 PKGS ?= ./...
 GOFILES := $(filter-out $(shell git ls-files --deleted -- '*.go'),$(shell git ls-files -- '*.go'))
 GOVULNCHECK_VERSION ?= v1.6.0
-ALLOW_TIDY_CHANGES ?= 0
 
 # Keep build cache inside the repo so local runs are reproducible and do not
 # depend on a writable global cache path.
@@ -37,12 +36,12 @@ build-examples: ## Compile the runnable example programs.
 	@echo "==> build examples"
 	@$(GO) build ./examples/...
 
-dependency-boundary: ## Keep OTel SDK and exporters out of the root package.
+dependency-boundary: ## Keep example-only dependencies out of the root package.
 	@echo "==> checking dependency boundary"
 	@imports="$$($(GO) list -deps -f '{{.ImportPath}}' .)"; \
-	forbidden="$$(printf '%s\n' "$$imports" | grep -E '^go\.opentelemetry\.io/otel/(exporters|sdk)(/|$$)' || true)"; \
+	forbidden="$$(printf '%s\n' "$$imports" | grep -E '^(github\.com/jaredjakacky/(configkit|dependkit|workerkit)|go\.opentelemetry\.io/otel/(exporters|sdk))(/|$$)' || true)"; \
 	if [ -n "$$forbidden" ]; then \
-		echo "The Servekit root package must not import OTel SDK or exporter packages:"; \
+		echo "The Servekit root package must not import example-only packages:"; \
 		echo "$$forbidden"; \
 		exit 1; \
 	fi
@@ -76,19 +75,13 @@ coverage: ## Run tests with coverage output written to coverage.out.
 	@echo "==> coverage"
 	@$(GO) test -coverprofile=coverage.out $(PKGS)
 
-tidy: ## Run go mod tidy; fail if it changes go.mod/go.sum unless explicitly allowed.
+tidy: ## Synchronize go.mod and go.sum with the source tree.
 	@echo "==> tidy"
 	@$(GO) mod tidy
-	@if [ "$(ALLOW_TIDY_CHANGES)" != "1" ]; then \
-		if ! git diff --quiet -- go.mod go.sum 2>/dev/null; then \
-			echo "go mod tidy changed go.mod/go.sum. Commit the changes or rerun with ALLOW_TIDY_CHANGES=1."; \
-			git --no-pager diff -- go.mod go.sum || true; \
-			exit 1; \
-		fi; \
-	fi
 
 tidy-check: ## Verify go.mod/go.sum are already tidy.
-	@$(MAKE) tidy ALLOW_TIDY_CHANGES=0
+	@echo "==> checking tidy"
+	@$(GO) mod tidy -diff
 
 govulncheck: ## Run the pinned govulncheck tool against the main module packages.
 	@echo "==> govulncheck"
