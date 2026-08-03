@@ -41,6 +41,30 @@ Workerkit, Dependkit, Clientkit, or any other domain kit. A sibling kit joins
 the HTTP operations surface by implementing Opskit contracts and being
 registered by the application.
 
+## Canonical current-kit example
+
+[`examples/kit-series-composition`](../examples/kit-series-composition) is the
+canonical single-service composition for the currently available kits. Its
+application composition root:
+
+- loads a typed Configkit manager
+- registers a Dependkit registry as the required cached dependency signal
+- gives that registry explicitly to a Workerkit check-group loop through
+  Dependkit's released Opskit adapter
+- registers the Configkit manager, Dependkit registry, and Workerkit runtime in
+  one Opskit registry
+- gives only that Opskit registry to Servekit
+- starts and shuts down Workerkit explicitly around the Servekit server
+
+The example does not mount Workerkit-specific command dispatch or lifecycle
+routes. Generic `/readyz` and `/admin/components` requests remain passive;
+focused Workerkit examples cover active HTTP controls separately.
+
+The sibling modules appear in Servekit's `go.mod` because Go has no separate
+development-dependency section and the repository builds its examples in CI.
+They are not imported by Servekit's root package or linked into applications
+that import only Servekit.
+
 ## HTTP presentation
 
 `WithOps(ops)` adds Opskit readiness to Servekit's built-in `GET /readyz`
@@ -92,5 +116,7 @@ may be serialized directly to HTTP responses. Components must therefore return
 only information safe for the intended operational audience. Do not include
 credentials, tokens, connection strings, user data, or other secrets.
 
-See [`examples/operations`](../examples/operations) for a runnable composition
-using only Servekit, Opskit, and synthetic components.
+See [`examples/operations`](../examples/operations) for the small Servekit and
+Opskit path. Continue with
+[`examples/kit-series-composition`](../examples/kit-series-composition) for the
+canonical current-kit service shell.

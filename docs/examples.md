@@ -25,7 +25,7 @@ If this example does not feel compelling, the rest of the package probably will 
 
 ### [`examples/operations`](../examples/operations)
 
-This is the primary Kit Series composition example.
+This is the smallest Kit Series presentation example.
 
 It shows:
 
@@ -39,6 +39,25 @@ It shows:
 The example imports only Servekit and Opskit. Domain kits join this surface by
 implementing Opskit contracts and being registered by the application; Servekit
 never needs to know which package produced a component.
+
+### [`examples/kit-series-composition`](../examples/kit-series-composition)
+
+This is the canonical single-service composition for the currently available
+kits.
+
+It shows:
+
+- typed Configkit state registered with Opskit
+- cached Dependkit readiness refreshed by a Workerkit check-group loop
+- Workerkit runtime state registered with the same Opskit registry
+- Servekit `/readyz` and authenticated `/admin/components` presentation
+- one small application route reading current typed configuration
+- explicit Workerkit startup and shutdown around the Servekit server
+- active Workerkit HTTP controls intentionally left to focused Workerkit
+  examples
+
+The sibling modules appear in Servekit's module graph for this buildable
+example, but the root Servekit package does not import them.
 
 ### [`examples/telemetry`](../examples/telemetry)
 

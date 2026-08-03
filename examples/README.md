@@ -14,24 +14,27 @@ Read the examples as a progression from the normal Servekit path through the sha
 
 1. [basic](basic)
 2. [operations](operations)
-3. [telemetry](telemetry)
-4. [endpoint-controls](endpoint-controls)
-5. [custom-encoding](custom-encoding)
-6. [readiness](readiness)
-7. [logging](logging)
-8. [cors](cors)
-9. [external-server](external-server)
-10. [advanced-composition](advanced-composition)
-11. [streaming](streaming)
-12. [reverse-proxy](reverse-proxy)
-13. [response-capture](response-capture)
+3. [kit-series-composition](kit-series-composition)
+4. [telemetry](telemetry)
+5. [endpoint-controls](endpoint-controls)
+6. [custom-encoding](custom-encoding)
+7. [readiness](readiness)
+8. [logging](logging)
+9. [cors](cors)
+10. [external-server](external-server)
+11. [advanced-composition](advanced-composition)
+12. [streaming](streaming)
+13. [reverse-proxy](reverse-proxy)
+14. [response-capture](response-capture)
 
 ## What Each Example Shows
 
 - [basic](basic)
   The core off-the-shelf story: one small business route plus `New`, `Handle`, `Run`, built-in probes, JSON encoding, IDs, access logs, panic recovery, and OpenTelemetry middleware that uses application-owned global providers.
 - [operations](operations)
-  The primary Kit Series composition story: one shared Opskit registry, required and informational components, Opskit-backed readiness, authenticated component inventory, and passive component snapshots without any domain-kit-specific Servekit integration.
+  The small Kit Series presentation story: one shared Opskit registry, required and informational components, Opskit-backed readiness, authenticated component inventory, and passive component snapshots without any domain-kit-specific Servekit integration.
+- [kit-series-composition](kit-series-composition)
+  The canonical current-kit service shell: typed Configkit state, cached Dependkit readiness, Workerkit-owned check execution and lifecycle, one shared Opskit registry, and passive Servekit HTTP presentation. Focused Workerkit examples cover active HTTP controls separately.
 - [telemetry](telemetry)
   The focused OpenTelemetry story: example-owned stdout exporters, global tracer and meter providers, request spans, request metrics, and `Run(...)`-path connection metrics without any Servekit-specific telemetry options.
 - [endpoint-controls](endpoint-controls)
@@ -77,6 +80,7 @@ go run ./examples/<name>
 # for example
 go run ./examples/basic
 go run ./examples/operations
+go run ./examples/kit-series-composition
 go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/advanced-composition
