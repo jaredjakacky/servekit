@@ -51,12 +51,13 @@ type requestOutcome struct {
 
 var requestCounter atomic.Uint64
 
-// RequestID ensures each request has an X-Request-ID value.
+// RequestID ensures each request has a safe X-Request-ID value. Incoming IDs
+// are accepted only when they contain 1-128 visible ASCII characters.
 func RequestID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			id := r.Header.Get("X-Request-ID")
-			if id == "" {
+			if !validInboundID(id) {
 				id = newCorrelationValue()
 			}
 			ctx := context.WithValue(r.Context(), requestIDKey, id)
@@ -66,12 +67,13 @@ func RequestID() Middleware {
 	}
 }
 
-// CorrelationID ensures each request has an X-Correlation-ID value.
+// CorrelationID ensures each request has a safe X-Correlation-ID value using
+// the same fixed validation rule as RequestID.
 func CorrelationID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			id := r.Header.Get("X-Correlation-ID")
-			if id == "" {
+			if !validInboundID(id) {
 				if requestID := RequestIDFromContext(r.Context()); requestID != "" {
 					id = requestID
 				} else {
@@ -107,10 +109,17 @@ func AccessLog(logger *slog.Logger) Middleware {
 					args := []any{
 						slog.String("method", r.Method),
 						slog.String("path", r.URL.Path),
-						slog.Int("status", completedStatusCode(rw, rec != nil)),
+					}
+					if status, ok := completedStatusCode(rw, rec != nil); ok {
+						args = append(args, slog.Int("status", status))
+					}
+					if rw.Hijacked() {
+						args = append(args, slog.Bool("hijacked", true))
+					}
+					args = append(args,
 						slog.Int("bytes", rw.BytesWritten()),
 						slog.Duration("duration", time.Since(start)),
-					}
+					)
 					if route := matchedRoutePath(r); route != "" {
 						args = append(args, slog.String("route", route))
 					}
@@ -201,6 +210,20 @@ func newCorrelationValue() string {
 	pid := uint64(os.Getpid()) << 32
 	binary.BigEndian.PutUint64(buf[8:], seq^pid)
 	return hex.EncodeToString(buf[:])
+}
+
+const maxInboundIDLength = 128
+
+func validInboundID(id string) bool {
+	if len(id) == 0 || len(id) > maxInboundIDLength {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < '!' || id[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // RequestIDFromContext returns the request ID inserted by RequestID.

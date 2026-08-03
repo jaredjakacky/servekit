@@ -35,6 +35,8 @@ type capturedResponseWriter interface {
 	StatusCode() int
 	BytesWritten() int
 	Committed() bool
+	Hijacked() bool
+	finalStatusWritten() bool
 	Unwrap() http.ResponseWriter
 }
 
@@ -47,6 +49,7 @@ type responseCapture struct {
 	status      int
 	bytes       int
 	wroteHeader bool
+	hijacked    bool
 }
 
 // captureWriter wraps w once per request and preserves the optional writer
@@ -107,15 +110,28 @@ func (w *responseCapture) Unwrap() http.ResponseWriter {
 }
 
 func (w *responseCapture) WriteHeader(code int) {
+	if w.hijacked {
+		// Preserve the underlying writer's post-hijack behavior without
+		// manufacturing a normal HTTP status for capture or telemetry.
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
+	if code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols {
+		// Informational responses do not commit the final response in
+		// net/http. A later final status, including a recovery 500, is still
+		// valid after one or more informational responses.
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if w.wroteHeader {
 		// Forward the redundant call to preserve net/http's own behavior for
 		// callers that invoke WriteHeader more than once.
 		w.ResponseWriter.WriteHeader(code)
 		return
 	}
+	w.ResponseWriter.WriteHeader(code)
 	w.wroteHeader = true
 	w.status = code
-	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *responseCapture) Write(p []byte) (int, error) {
@@ -146,9 +162,20 @@ func (w *responseCapture) StatusCode() int {
 	return w.status
 }
 
-// Committed reports whether the wrapped writer has already committed response
-// headers.
+// Committed reports whether the wrapped writer has committed final response
+// headers or successfully handed off the connection through Hijack.
 func (w *responseCapture) Committed() bool {
+	return w.wroteHeader || w.hijacked
+}
+
+// Hijacked reports whether the underlying connection was successfully taken
+// over through http.Hijacker. After that point normal HTTP response writing is
+// no longer available.
+func (w *responseCapture) Hijacked() bool {
+	return w.hijacked
+}
+
+func (w *responseCapture) finalStatusWritten() bool {
 	return w.wroteHeader
 }
 
@@ -166,7 +193,11 @@ type responseCaptureFlush struct {
 }
 
 func (w *responseCaptureFlush) Flush() {
-	w.flusher.Flush()
+	_ = w.FlushError()
+}
+
+func (w *responseCaptureFlush) FlushError() error {
+	return flushWithTracking(w.responseCapture, w.flusher)
 }
 
 type responseCaptureHijack struct {
@@ -182,7 +213,7 @@ func (w *responseCaptureHijack) setHijackTracker(fn func(net.Conn) net.Conn) {
 }
 
 func (w *responseCaptureHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return hijackWithTracking(w.hijacker, w.trackHijack)
+	return hijackWithTracking(w.responseCapture, w.hijacker, w.trackHijack)
 }
 
 type responseCaptureFlushHijack struct {
@@ -199,11 +230,15 @@ func (w *responseCaptureFlushHijack) setHijackTracker(fn func(net.Conn) net.Conn
 }
 
 func (w *responseCaptureFlushHijack) Flush() {
-	w.flusher.Flush()
+	_ = w.FlushError()
+}
+
+func (w *responseCaptureFlushHijack) FlushError() error {
+	return flushWithTracking(w.responseCapture, w.flusher)
 }
 
 func (w *responseCaptureFlushHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return hijackWithTracking(w.hijacker, w.trackHijack)
+	return hijackWithTracking(w.responseCapture, w.hijacker, w.trackHijack)
 }
 
 type responseCaptureWriter struct {
@@ -214,17 +249,41 @@ func (w responseCaptureWriter) Write(p []byte) (int, error) {
 	return w.capture.Write(p)
 }
 
-func hijackWithTracking(hijacker http.Hijacker, trackHijack func(net.Conn) net.Conn) (net.Conn, *bufio.ReadWriter, error) {
+func flushWithTracking(capture *responseCapture, flusher http.Flusher) error {
+	if !capture.Committed() {
+		// Both the HTTP/1.x and HTTP/2 net/http implementations commit an
+		// implicit 200 before flushing. Record that final status before the
+		// underlying Flush operation can expose the response to the client.
+		capture.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := flusher.(interface{ FlushError() error }); ok {
+		return flusher.FlushError()
+	}
+	flusher.Flush()
+	return nil
+}
+
+func hijackWithTracking(capture *responseCapture, hijacker http.Hijacker, trackHijack func(net.Conn) net.Conn) (net.Conn, *bufio.ReadWriter, error) {
 	conn, rw, err := hijacker.Hijack()
-	if err != nil || trackHijack == nil {
+	if err != nil {
 		return conn, rw, err
+	}
+	// Mark the response terminal before invoking the optional hook. If that
+	// hook panics, recovery still must not write through the now-hijacked
+	// ResponseWriter.
+	capture.hijacked = true
+	if trackHijack == nil {
+		return conn, rw, nil
 	}
 	return trackHijack(conn), rw, nil
 }
 
-func completedStatusCode(w capturedResponseWriter, panicked bool) int {
+func completedStatusCode(w capturedResponseWriter, panicked bool) (int, bool) {
 	if panicked && !w.Committed() {
-		return http.StatusInternalServerError
+		return http.StatusInternalServerError, true
 	}
-	return w.StatusCode()
+	if w.Hijacked() && !w.finalStatusWritten() {
+		return 0, false
+	}
+	return w.StatusCode(), true
 }

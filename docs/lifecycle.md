@@ -39,7 +39,7 @@ Default behavior:
 
 - before readiness is true, `/readyz` returns `503 Service Unavailable`
 - once the server is ready, `/readyz` returns `200 OK`
-- if `WithOps(...)` is configured and Opskit readiness is not ready, `/readyz` returns `503 Service Unavailable` with Opskit readiness details
+- if `WithOps(...)` is configured and Opskit readiness is not ready, `/readyz` returns `503 Service Unavailable` with an aggregate reason
 - if a standalone readiness predicate fails, `/readyz` returns `503 Service Unavailable` with a `reason`
 
 ## Opskit readiness
@@ -61,21 +61,18 @@ Opskit readiness is only evaluated after Servekit's own readiness is true. That 
 
 Opskit readiness and component snapshot reads receive a bounded context. The default timeout is `2s`; override it with `WithOpsTimeout(...)` when your components need a different probe or snapshot budget. This supplies a deadline but cannot force a component method to return when that implementation ignores context cancellation.
 
-When Opskit is not ready, the response includes its aggregate readiness view:
+When Opskit is not ready, the response stays intentionally small:
 
 ```json
 {
   "status": "not_ready",
-  "reason": "one or more readiness components are not ready",
-  "readiness": {
-    "ready": false,
-    "reason": "one or more readiness components are not ready"
-  }
+  "reason": "one or more readiness components are not ready"
 }
 ```
 
-Readiness reasons and component details must be safe for the audience that can
-reach `/readyz`.
+Component identities, states, reasons, and messages are not returned by the
+default probe. Use the opt-in admin component routes, with an auth gate or
+equivalent network protection, when operators need that detail.
 
 ## Readiness checks
 

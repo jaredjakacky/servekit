@@ -77,6 +77,9 @@ decision. Readiness is evaluated in this order:
 The lifecycle gate remains first so startup, explicit readiness, drain delay,
 and shutdown remain under Servekit's control.
 
+The readiness response exposes only the aggregate decision and reason. It does
+not serialize component identities, states, reasons, or messages.
+
 Adding `WithOpsAdmin()` exposes two generic, read-only component routes:
 
 - `GET /admin/components` returns registry inventory from `Registry.Entries()`.
@@ -111,9 +114,9 @@ Admin routes are disabled unless `WithOpsAdmin()` is supplied. Once enabled,
 they are unauthenticated unless the service adds
 `WithOpsAdminAuthGate(...)` or equivalent network-level protection.
 
-Readiness reasons, component identity, status attributes, and inspection data
-may be serialized directly to HTTP responses. Components must therefore return
-only information safe for the intended operational audience. Do not include
+Component identity, readiness details, status attributes, and inspection data
+may be serialized by the opt-in admin routes. Components must therefore return
+only information safe for the protected operational audience. Do not include
 credentials, tokens, connection strings, user data, or other secrets.
 
 See [`examples/operations`](../examples/operations) for the small Servekit and

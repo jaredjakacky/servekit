@@ -22,9 +22,8 @@ func (s *Server) writeOpsReadinessFailure(w http.ResponseWriter, r *http.Request
 	}
 
 	writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{
-		"status":    "not_ready",
-		"reason":    readiness.Reason,
-		"readiness": readiness,
+		"status": "not_ready",
+		"reason": readiness.Reason,
 	})
 	return true
 }
