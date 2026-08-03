@@ -110,7 +110,27 @@ Two common integration modes are:
 1. the host application installs global OTel providers and propagators, and Servekit uses those defaults
 2. the server overrides providers, propagators, attributes, span naming, or route labels with Servekit options
 
-The repository's [`examples/basic`](../examples/basic) example takes the first path in the smallest possible service. The dedicated [`examples/telemetry`](../examples/telemetry) example goes further and makes both spans and metrics visible through process-wide stdout exporters.
+The repository's [`examples/basic`](../examples/basic) example leaves provider
+installation to the host application, which keeps the smallest service focused
+on Servekit itself. The dedicated
+[`examples/telemetry`](../examples/telemetry) example installs process-wide
+providers backed by stdout exporters so both spans and metrics are visible
+locally.
+
+### Dependency ownership
+
+Servekit's root package imports the OpenTelemetry API packages because it owns
+HTTP instrumentation and exposes provider and propagator interfaces in its
+public options. It does not construct SDK providers or exporters. Selecting,
+configuring, and shutting down those process-wide resources belongs to the host
+application.
+
+The repository keeps its runnable examples in the main Go module. As a result,
+`go.mod` also records OpenTelemetry SDK and stdout exporter dependencies used by
+`examples/telemetry`. Go compiles packages by import reachability, so those
+example-only dependencies are not compiled or linked into an application that
+imports only Servekit. Keeping them in one module lets CI build the examples
+against the same dependency versions as the package they demonstrate.
 
 ### Request metrics
 

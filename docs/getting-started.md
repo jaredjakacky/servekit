@@ -47,7 +47,11 @@ func main() {
 
 The handler returns one payload or one error. Servekit handles the rest of the normal API path around it.
 
-This guide intentionally keeps the first service as small as possible. The runnable [`examples/basic`](../examples/basic) example adds a global stdout OpenTelemetry exporter so Servekit's default tracing is visible immediately, but the Servekit flow is the same.
+This guide intentionally keeps the first service as small as possible. The
+runnable [`examples/basic`](../examples/basic) example follows the same path and
+leaves OpenTelemetry provider and exporter setup to the host application. Use
+the dedicated [`examples/telemetry`](../examples/telemetry) example when you
+want locally visible spans and metrics.
 
 ## Run it
 
@@ -105,7 +109,12 @@ A fresh `servekit.New()` server starts with:
 
 That gives a new service a real HTTP baseline without leaving the underlying `net/http` model. You still work with `http.Request`, `http.Handler`, and `http.ServeMux`.
 
-Servekit's default OTel middleware uses the global tracer provider and propagator unless you override them. That means your application can install its normal process-wide OTel setup and Servekit will pick it up automatically. The repository's [`examples/basic`](../examples/basic) example does exactly that with a stdout exporter so the default tracing behavior is easy to see.
+Servekit's default OTel middleware uses the global tracer provider and
+propagator unless you override them. That means your application can install
+its normal process-wide OTel setup and Servekit will pick it up automatically.
+The repository's [`examples/telemetry`](../examples/telemetry) example shows
+that integration with stdout exporters so the default tracing and metrics are
+easy to see.
 
 ## How routing works
 

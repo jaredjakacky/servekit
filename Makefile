@@ -16,6 +16,7 @@ export GOCACHE ?= $(CURDIR)/.cache/go-build
 .PHONY: \
 	help \
 	build-examples \
+	dependency-boundary \
 	fmt \
 	fmt-check \
 	vet \
@@ -35,6 +36,16 @@ help: ## Show available targets.
 build-examples: ## Compile the runnable example programs.
 	@echo "==> build examples"
 	@$(GO) build ./examples/...
+
+dependency-boundary: ## Keep OTel SDK and exporters out of the root package.
+	@echo "==> checking dependency boundary"
+	@imports="$$($(GO) list -deps -f '{{.ImportPath}}' .)"; \
+	forbidden="$$(printf '%s\n' "$$imports" | grep -E '^go\.opentelemetry\.io/otel/(exporters|sdk)(/|$$)' || true)"; \
+	if [ -n "$$forbidden" ]; then \
+		echo "The Servekit root package must not import OTel SDK or exporter packages:"; \
+		echo "$$forbidden"; \
+		exit 1; \
+	fi
 
 fmt: ## Format tracked Go source files.
 	@echo "==> formatting"
@@ -83,7 +94,7 @@ govulncheck: ## Run the pinned govulncheck tool against the main module packages
 	@echo "==> govulncheck"
 	@$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(PKGS)
 
-verify: fmt-check vet test build-examples tidy-check ## Run the local verification suite.
+verify: fmt-check dependency-boundary vet test build-examples tidy-check ## Run the local verification suite.
 	@echo "==> verification passed"
 
 clean: ## Remove local build outputs and caches.
