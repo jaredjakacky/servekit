@@ -19,7 +19,7 @@ It shows the main Servekit promise in one place:
 - `Run`
 - built-in operational endpoints
 - JSON encoding, IDs, access logs, and panic recovery by default
-- a global stdout exporter installed only so the default OTel middleware is visible when you run it
+- built-in OTel middleware that uses application-owned global providers
 
 If this example does not feel compelling, the rest of the package probably will not either.
 
@@ -45,6 +45,7 @@ never needs to know which package produced a component.
 Shows the stronger telemetry story directly:
 
 - global tracer and meter providers
+- process-wide stdout exporters used only by this example
 - request spans through Servekit's default OTel middleware
 - request metrics through Servekit's default OTel middleware
 - server connection metrics on the `Run(...)` path

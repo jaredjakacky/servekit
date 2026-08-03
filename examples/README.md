@@ -29,11 +29,11 @@ Read the examples as a progression from the normal Servekit path through the sha
 ## What Each Example Shows
 
 - [basic](basic)
-  The core off-the-shelf story: one small business route plus `New`, `Handle`, `Run`, built-in probes, JSON encoding, IDs, access logs, panic recovery, and visible OpenTelemetry tracing through the global provider.
+  The core off-the-shelf story: one small business route plus `New`, `Handle`, `Run`, built-in probes, JSON encoding, IDs, access logs, panic recovery, and OpenTelemetry middleware that uses application-owned global providers.
 - [operations](operations)
   The primary Kit Series composition story: one shared Opskit registry, required and informational components, Opskit-backed readiness, authenticated component inventory, and passive component snapshots without any domain-kit-specific Servekit integration.
 - [telemetry](telemetry)
-  The focused OpenTelemetry story: global tracer and meter providers, request spans, request metrics, and `Run(...)`-path connection metrics without any Servekit-specific telemetry options.
+  The focused OpenTelemetry story: example-owned stdout exporters, global tracer and meter providers, request spans, request metrics, and `Run(...)`-path connection metrics without any Servekit-specific telemetry options.
 - [endpoint-controls](endpoint-controls)
   The focused middleware and route-level policy story: `WithMiddleware(...)`, `WithAuthCheck(...)`, `WithAuthGate(...)`, `WithEndpointMiddleware(...)`, `WithBodyLimit(...)`, `WithEndpointTimeout(...)`, and route-local observability suppression.
 - [custom-encoding](custom-encoding)
