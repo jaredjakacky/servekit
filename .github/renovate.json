@@ -6,6 +6,10 @@
   "rangeStrategy": "replace",
   "prConcurrentLimit": 4,
 
+  // This integration example intentionally snapshots sibling kit releases.
+  // Updating them automatically would recreate a cross-repository release loop.
+  "ignorePaths": ["examples/kit-series-composition/**"],
+
   // go.dev/dl stable releases are treated as newest-first:
   // [0] = current stable line, [1] = previous stable line
   "customDatasources": {
