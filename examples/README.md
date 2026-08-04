@@ -80,10 +80,12 @@ go run ./examples/<name>
 # for example
 go run ./examples/basic
 go run ./examples/operations
-go run ./examples/kit-series-composition
 go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/advanced-composition
+
+# The cross-kit integration example is an isolated Go module.
+go -C examples/kit-series-composition run .
 ```
 
 Each example prints suggested `curl` commands on startup. The source comments in each `main.go` explain the purpose of the example and the behavior worth noticing.

@@ -56,8 +56,9 @@ It shows:
 - active Workerkit HTTP controls intentionally left to focused Workerkit
   examples
 
-The sibling modules appear in Servekit's module graph for this buildable
-example, but the root Servekit package does not import them.
+The example has its own nested Go module so the sibling kits do not appear in
+Servekit's published module graph. Its local `replace` directive builds against
+the checked-out Servekit source, and repository verification tests both modules.
 
 ### [`examples/telemetry`](../examples/telemetry)
 
@@ -196,6 +197,13 @@ go run ./examples/operations
 go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/streaming
+```
+
+The Kit Series composition is the one exception because it is an isolated
+integration module:
+
+```bash
+go -C examples/kit-series-composition run .
 ```
 
 Each example prints suggested `curl` commands on startup.
