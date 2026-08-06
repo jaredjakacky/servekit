@@ -136,7 +136,8 @@ func main() {
 	})
 
 	// This route combines several endpoint-level overrides without changing the
-	// rest of the server: auth gate, timeout, body limit, and local middleware.
+	// rest of the server. The auth gate, timeout, and body limit apply before the
+	// local middleware and handler.
 	s.Handle(http.MethodPost, "/admin/reindex", func(r *http.Request) (any, error) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {

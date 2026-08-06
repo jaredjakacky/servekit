@@ -39,7 +39,8 @@ func main() {
 	}))
 
 	// WithAuthGate is the richer route-level gate: it can return a specific
-	// Servekit error, while local middleware can still adjust the route only.
+	// Servekit error. After the gate accepts, local middleware can still adjust
+	// only this route.
 	s.Handle(http.MethodPost, "/admin/publish", func(r *http.Request) (any, error) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {

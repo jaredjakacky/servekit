@@ -16,9 +16,10 @@ type HandlerFunc func(r *http.Request) (any, error)
 
 // Handle registers a method/path endpoint backed by a HandlerFunc.
 //
-// Handle applies endpoint options in this order: timeout and auth gate before
-// invoking h with an updated request context, then success encoding with the
-// server ResponseEncoder unless WithEndpointResponseEncoder overrides it.
+// Handle applies endpoint policy before endpoint middleware and h. The policy
+// installs the endpoint timeout and body limit, then runs the auth checks.
+// Successful results are encoded with the server ResponseEncoder unless
+// WithEndpointResponseEncoder overrides it.
 // Errors from h or the encoder are sent through the server ErrorEncoder. If a
 // success response has already been committed, the error path may not be able
 // to replace it cleanly.
@@ -41,17 +42,17 @@ func (s *Server) Handle(method, path string, h HandlerFunc, opts ...EndpointOpti
 			_ = s.errorResponse(w, r, err)
 		}
 	})
-	wrapped := s.wrapEndpoint(base, cfg)
-	final := Chain(wrapped, cfg.middlewares...)
+	inner := Chain(base, cfg.middlewares...)
+	final := s.wrapEndpoint(inner, cfg)
 	s.register(method, path, final, cfg)
 }
 
 // HandleHTTP registers a method/path endpoint backed by a raw http.Handler.
 //
-// HandleHTTP applies endpoint options in this order: timeout and auth gate
-// before invoking h, then endpoint middleware. Use HandleHTTP when you need
-// direct control over response writing while still using Servekit middleware
-// composition and endpoint options.
+// HandleHTTP applies endpoint policy before endpoint middleware and h. The
+// policy installs the endpoint timeout and body limit, then runs the auth
+// checks. Use HandleHTTP when you need direct control over response writing
+// while still using Servekit middleware composition and endpoint options.
 //
 // Optional writer capabilities such as Flush and Hijack are not guaranteed by
 // http.ResponseWriter itself. They depend on what the underlying concrete
@@ -63,15 +64,16 @@ func (s *Server) HandleHTTP(method, path string, h http.Handler, opts ...Endpoin
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	wrapped := s.wrapEndpoint(h, cfg)
-	final := Chain(wrapped, cfg.middlewares...)
+	inner := Chain(h, cfg.middlewares...)
+	final := s.wrapEndpoint(inner, cfg)
 	s.register(method, path, final, cfg)
 }
 
-// wrapEndpoint applies per-endpoint timeout and auth behavior around h.
+// wrapEndpoint applies per-endpoint timeout, body-limit, and auth behavior
+// around h.
 //
-// The returned handler updates the request context before invoking h so both
-// Handle and HandleHTTP observe the same endpoint-level policy.
+// The returned handler updates the request context and body before auth and h
+// so Handle and HandleHTTP observe the same endpoint-level policy.
 func (s *Server) wrapEndpoint(h http.Handler, cfg endpointConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -219,15 +221,17 @@ type endpointConfig struct {
 
 // WithEndpointMiddleware appends middleware applied only to that endpoint.
 //
-// Endpoint middleware wraps the handler before global server middleware is
-// applied by Server.Handler.
+// Endpoint middleware runs after endpoint timeout, body-limit, and auth policy,
+// and wraps the handler before global server middleware is applied by
+// Server.Handler.
 func WithEndpointMiddleware(mw ...Middleware) EndpointOption {
 	return func(cfg *endpointConfig) { cfg.middlewares = append(cfg.middlewares, mw...) }
 }
 
 // WithEndpointTimeout sets a per-endpoint context timeout.
 //
-// A timeout of zero leaves the incoming request context unchanged.
+// Endpoint middleware and the handler receive the resulting context. A timeout
+// of zero leaves the incoming request context unchanged.
 func WithEndpointTimeout(timeout time.Duration) EndpointOption {
 	return func(cfg *endpointConfig) { cfg.timeout = timeout }
 }
@@ -237,8 +241,10 @@ func WithEndpointTimeout(timeout time.Duration) EndpointOption {
 // entirely. The default is the server-wide WithRequestBodyLimit value
 // (4 MiB unless overridden).
 //
-// When the limit is exceeded, net/http returns an *http.MaxBytesError and
-// Servekit maps it to HTTP 413 Request Entity Too Large.
+// Endpoint middleware and the handler share the limited body. When the limit is
+// exceeded, net/http returns an *http.MaxBytesError. Servekit maps errors
+// returned by HandlerFunc to HTTP 413 Request Entity Too Large; raw endpoint
+// middleware and HandleHTTP handlers remain responsible for their own response.
 func WithBodyLimit(n int64) EndpointOption {
 	return func(cfg *endpointConfig) { cfg.bodyLimit = n }
 }
@@ -246,9 +252,9 @@ func WithBodyLimit(n int64) EndpointOption {
 // WithAuthCheck installs an authorization gate for the endpoint.
 //
 // When check returns false, Handle and HandleHTTP respond with HTTP 401 via the
-// current ErrorEncoder and do not invoke the handler. This convenience form
-// always returns HTTP 401. Use WithAuthGate when you need control over the
-// returned status or message.
+// current ErrorEncoder and do not invoke endpoint middleware or the handler.
+// This convenience form always returns HTTP 401. Use WithAuthGate when you need
+// control over the returned status or message.
 func WithAuthCheck(check func(*http.Request) bool) EndpointOption {
 	return func(cfg *endpointConfig) { cfg.requireAuth = check }
 }
@@ -256,9 +262,9 @@ func WithAuthCheck(check func(*http.Request) bool) EndpointOption {
 // WithAuthGate installs an error-returning auth gate for the endpoint.
 //
 // When fn returns a non-nil error, Handle and HandleHTTP pass that error
-// directly to the current ErrorEncoder and do not invoke the handler. Return
-// HTTPError values or Error(...) when you need explicit control over the
-// response status and message.
+// directly to the current ErrorEncoder and do not invoke endpoint middleware or
+// the handler. Return HTTPError values or Error(...) when you need explicit
+// control over the response status and message.
 func WithAuthGate(fn func(*http.Request) error) EndpointOption {
 	return func(cfg *endpointConfig) { cfg.requireAuthGate = fn }
 }
