@@ -117,12 +117,12 @@ request
   -> AccessLog (optional)
   -> custom WithMiddleware(...)
   -> http.ServeMux route match
-  -> route-local WithEndpointMiddleware(...)
   -> route-local timeout / body limit / auth checks
+  -> route-local WithEndpointMiddleware(...)
   -> Handle(...) or HandleHTTP(...)
 ```
 
-That layering is intentional. Servekit owns the reusable operational baseline, but application-owned middleware stays first-class within the same model.
+That layering is intentional. Global application middleware remains outside route-local policy, while endpoint middleware receives the same authenticated, body-limited, deadline-aware request as the application handler.
 
 Use `WithMiddleware(...)` when behavior should apply across the whole service. Use `WithEndpointMiddleware(...)` when only one matched route needs special policy.
 
@@ -237,17 +237,19 @@ Use `WithMiddleware(...)` on `New(...)` when the behavior should apply across th
 
 ### Timeout
 
-Use `WithEndpointTimeout(...)` to set a request-context timeout for one route.
+Use `WithEndpointTimeout(...)` to set a request-context timeout for one route. Endpoint middleware and the application handler both receive that context.
 
 ### Body limit
 
-Use `WithBodyLimit(...)` to override the server-wide request body limit for one route. `-1` disables the limit.
+Use `WithBodyLimit(...)` to override the server-wide request body limit for one route. Endpoint middleware and the application handler share the limited body. `-1` disables the limit.
 
 ### Auth
 
 Use `WithAuthCheck(...)` for simple allow-or-deny behavior that returns HTTP `401`.
 
 Use `WithAuthGate(...)` when the auth layer needs to return a richer or more specific error.
+
+Both auth forms run before endpoint middleware. A rejected request invokes neither endpoint middleware nor the application handler.
 
 ### Response encoder override
 

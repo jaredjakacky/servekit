@@ -358,7 +358,7 @@ Servekit's default path already includes request-level tracing and metrics. On t
 
 - `WithEndpointMiddleware(mw ...Middleware)`
 
-  Appends middleware for one route only.
+  Appends middleware for one route only. Endpoint timeout, body-limit, and auth policy run before this middleware.
 
 - `WithEndpointTimeout(timeout time.Duration)`
 

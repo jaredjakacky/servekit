@@ -221,12 +221,12 @@ The two levels are intentionally separate:
 - global middleware is for behavior shared across the whole service
 - endpoint middleware is for exceptional routes with special policy
 
-That separation keeps customization local when it should be local. A service can stamp headers, enrich auth context, attach auditing behavior, or add one-off route policy without replacing Servekit's request IDs, tracing, access logs, probes, or shutdown model.
+That separation keeps customization local when it should be local. A service can stamp headers, enrich handler context, attach post-auth auditing behavior, or add one-off route policy without replacing Servekit's request IDs, tracing, access logs, probes, or shutdown model.
 
 Ordering matters here too:
 
 - `WithMiddleware(...)` runs inside Servekit's built-in stack and before mux dispatch
-- `WithEndpointMiddleware(...)` wraps only the matched route after routing
+- `WithEndpointMiddleware(...)` wraps only the matched route after routing and after its timeout, body-limit, and auth policy
 
 See [`examples/endpoint-controls`](../examples/endpoint-controls) for the smallest runnable example that shows both layers, and [`examples/advanced-composition`](../examples/advanced-composition) for the heavier composition path.
 
