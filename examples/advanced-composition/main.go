@@ -86,23 +86,15 @@ func main() {
 		}),
 		servekit.WithTracerProvider(tracenoop.NewTracerProvider()),
 		servekit.WithMeterProvider(metricnoop.NewMeterProvider()),
-		servekit.WithOTelAttributes(func(r *http.Request) []attribute.KeyValue {
+		servekit.WithOTelSpanAttributes(func(*http.Request) []attribute.KeyValue {
 			return []attribute.KeyValue{
 				attribute.String("servekit.example", "advanced-composition"),
-				attribute.String("servekit.request_id", servekit.RequestIDFromContext(r.Context())),
 			}
 		}),
-		servekit.WithSpanNameFormatter(func(r *http.Request, route string) string {
-			if route == "" {
-				route = r.URL.Path
+		servekit.WithOTelMetricAttributes(func(*http.Request) []attribute.KeyValue {
+			return []attribute.KeyValue{
+				attribute.String("servekit.example", "advanced-composition"),
 			}
-			return r.Method + " " + route
-		}),
-		servekit.WithRouteLabeler(func(r *http.Request) string {
-			if r.Pattern != "" {
-				return "advanced:" + r.Pattern
-			}
-			return "advanced:" + r.URL.Path
 		}),
 	)
 

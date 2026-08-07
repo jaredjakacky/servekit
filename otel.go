@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,22 +16,34 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/semconv/v1.43.0/httpconv"
 	"go.opentelemetry.io/otel/trace"
 )
 
 const instrumentationName = "github.com/jaredjakacky/servekit"
 
+const (
+	panicMetricName              = "servekit.http.server.request.panic.count"
+	timeoutMetricName            = "servekit.http.server.request.timeout.count"
+	cancellationMetricName       = "servekit.http.server.request.cancellation.count"
+	authRejectionMetricName      = "servekit.http.server.request.auth_rejection.count"
+	activeConnectionMetricName   = "servekit.http.server.connection.active"
+	hijackedConnectionMetricName = "servekit.http.server.connection.hijacked.active"
+)
+
 type observabilityConfig struct {
 	tracerProvider   trace.TracerProvider
 	meterProvider    metric.MeterProvider
 	propagator       propagation.TextMapPropagator
-	attributes       func(*http.Request) []attribute.KeyValue
+	spanAttributes   func(*http.Request) []attribute.KeyValue
+	metricAttributes func(*http.Request) []attribute.KeyValue
 	spanName         func(*http.Request, string) string
 	routeLabel       func(*http.Request) string
 	skipTelemetry    func(*http.Request) bool
 	enablePanicCount bool
 	serverMetrics    *otelServerMetrics
+	knownMethods     map[string]httpconv.RequestMethodAttr
 	// panicCountSet distinguishes "explicitly false" from the bool zero value so
 	// default resolution can preserve panic counting unless the user opts out.
 	panicCountSet bool
@@ -37,10 +51,11 @@ type observabilityConfig struct {
 
 func defaultObservabilityConfig() observabilityConfig {
 	return observabilityConfig{
-		attributes:       func(*http.Request) []attribute.KeyValue { return nil },
-		spanName:         defaultSpanName,
+		spanAttributes:   func(*http.Request) []attribute.KeyValue { return nil },
+		metricAttributes: func(*http.Request) []attribute.KeyValue { return nil },
 		routeLabel:       defaultRouteLabel,
 		enablePanicCount: true,
+		knownMethods:     knownHTTPMethods(),
 	}
 }
 
@@ -69,8 +84,11 @@ func resolvedObservabilityConfig(overrides observabilityConfig) observabilityCon
 	if obs.propagator == nil {
 		obs.propagator = otel.GetTextMapPropagator()
 	}
-	if overrides.attributes != nil {
-		obs.attributes = overrides.attributes
+	if overrides.spanAttributes != nil {
+		obs.spanAttributes = overrides.spanAttributes
+	}
+	if overrides.metricAttributes != nil {
+		obs.metricAttributes = overrides.metricAttributes
 	}
 	if overrides.spanName != nil {
 		obs.spanName = overrides.spanName
@@ -111,16 +129,36 @@ func WithPropagator(p propagation.TextMapPropagator) Option {
 	return func(s *Server) { s.observabilityOverrides.propagator = p }
 }
 
-// WithOTelAttributes appends request attributes to spans and metrics.
-func WithOTelAttributes(fn func(*http.Request) []attribute.KeyValue) Option {
+// WithOTelSpanAttributes appends request-derived attributes to server spans.
+//
+// Span attributes may contain high-cardinality values that would be unsafe on
+// metrics, such as request identifiers or full URLs. Use
+// WithOTelMetricAttributes separately for bounded metric dimensions.
+func WithOTelSpanAttributes(fn func(*http.Request) []attribute.KeyValue) Option {
 	return func(s *Server) {
 		if fn != nil {
-			s.observabilityOverrides.attributes = fn
+			s.observabilityOverrides.spanAttributes = fn
+		}
+	}
+}
+
+// WithOTelMetricAttributes appends low-cardinality request attributes to
+// built-in request metrics.
+//
+// Values returned by fn must come from a bounded set. Request IDs, tenant IDs,
+// raw URLs, and other unbounded values must not be used as metric attributes.
+func WithOTelMetricAttributes(fn func(*http.Request) []attribute.KeyValue) Option {
+	return func(s *Server) {
+		if fn != nil {
+			s.observabilityOverrides.metricAttributes = fn
 		}
 	}
 }
 
 // WithSpanNameFormatter overrides per-request span naming.
+//
+// Returned names should be bounded operation names or route templates, not raw
+// request paths or arbitrary request methods.
 func WithSpanNameFormatter(fn func(*http.Request, string) string) Option {
 	return func(s *Server) {
 		if fn != nil {
@@ -129,7 +167,10 @@ func WithSpanNameFormatter(fn func(*http.Request, string) string) Option {
 	}
 }
 
-// WithRouteLabeler overrides the low-cardinality route label strategy.
+// WithRouteLabeler overrides the low-cardinality route label strategy used by
+// spans and request metrics.
+//
+// Returned labels must be bounded route templates, not raw request paths.
 func WithRouteLabeler(fn func(*http.Request) string) Option {
 	return func(s *Server) {
 		if fn != nil {
@@ -161,10 +202,16 @@ func otelTracingMiddleware(obs observabilityConfig) Middleware {
 				return
 			}
 			r = withMatchedRoute(r)
-			initialRoute := obs.routeLabel(r)
-			spanName := obs.spanName(r, initialRoute)
-			ctx, span := tracer.Start(r.Context(), spanName, trace.WithSpanKind(trace.SpanKindServer))
-			defer span.End()
+			start := time.Now()
+			timing := &otelRequestTiming{start: start}
+			r = r.WithContext(context.WithValue(r.Context(), otelRequestTimingKey{}, timing))
+			ctx, span := tracer.Start(
+				r.Context(),
+				formatSpanName(obs, r, ""),
+				trace.WithSpanKind(trace.SpanKindServer),
+				trace.WithTimestamp(start),
+				trace.WithAttributes(spanAttributes(r, obs.knownMethods)...),
+			)
 			r = r.WithContext(ctx)
 			rw := captureWriter(w, responseCaptureHooks{
 				trackHijack: func(conn net.Conn) net.Conn {
@@ -175,43 +222,46 @@ func otelTracingMiddleware(obs observabilityConfig) Middleware {
 				},
 			})
 
-			// Attach stable request metadata early so the span is useful even on failures.
-			attrs := spanAttributes(r, initialRoute, obs.attributes)
-			span.SetAttributes(attrs...)
-
 			defer func() {
+				rec := recover()
+				end := timing.end
+				if end.IsZero() {
+					end = time.Now()
+				}
+				defer span.End(trace.WithTimestamp(end))
 				// Finalize the span from the observed request outcome.
 				finalRoute := obs.routeLabel(r)
-				if finalRoute != initialRoute {
-					span.SetName(obs.spanName(r, finalRoute))
-					if finalRoute != "" {
-						span.SetAttributes(semconv.HTTPRoute(finalRoute))
-					}
+				span.SetName(formatSpanName(obs, r, finalRoute))
+				if finalRoute != "" {
+					span.SetAttributes(semconv.HTTPRoute(finalRoute))
 				}
-				rec := recover()
 				status, statusKnown := completedStatusCode(rw, rec)
 				if statusKnown {
 					span.SetAttributes(semconv.HTTPResponseStatusCode(status))
 				}
+				if errorType := responseErrorType(status, statusKnown, rec); errorType != "" {
+					span.SetAttributes(semconv.ErrorTypeKey.String(errorType))
+				}
 				if rec != nil {
 					span.RecordError(fmt.Errorf("panic: %v", rec))
 					span.SetStatus(codes.Error, "panic")
-					panic(rec)
+				} else if statusKnown && status >= http.StatusInternalServerError {
+					span.SetStatus(codes.Error, "")
 				}
-				if statusKnown && status >= http.StatusInternalServerError {
-					span.SetStatus(codes.Error, http.StatusText(status))
+				if rec != nil {
+					panic(rec)
 				}
 			}()
 
+			span.SetAttributes(customAttributes(r, obs.spanAttributes)...)
 			next.ServeHTTP(rw, r)
 		})
 	}
 }
 
 type otelMetrics struct {
-	requestCount      metric.Int64Counter
-	duration          metric.Float64Histogram
-	inFlight          metric.Int64UpDownCounter
+	duration          httpconv.ServerRequestDuration
+	activeRequests    httpconv.ServerActiveRequests
 	panicCount        metric.Int64Counter
 	timeoutCount      metric.Int64Counter
 	cancellationCount metric.Int64Counter
@@ -220,6 +270,7 @@ type otelMetrics struct {
 	customAttrs       func(*http.Request) []attribute.KeyValue
 	routeExtractor    func(*http.Request) string
 	skipTelemetry     func(*http.Request) bool
+	knownMethods      map[string]httpconv.RequestMethodAttr
 }
 
 type otelServerMetrics struct {
@@ -231,8 +282,16 @@ type otelServerMetrics struct {
 
 func newOTelServerMetrics(obs observabilityConfig) *otelServerMetrics {
 	meter := obs.meterProvider.Meter(instrumentationName)
-	activeConnections, _ := meter.Int64UpDownCounter("http.server.connection.active", metric.WithUnit("{connection}"))
-	activeHijackedConnections, _ := meter.Int64UpDownCounter("http.server.connection.hijacked.active", metric.WithUnit("{connection}"))
+	activeConnections, _ := meter.Int64UpDownCounter(
+		activeConnectionMetricName,
+		metric.WithDescription("Number of active connections managed by Servekit's net/http server."),
+		metric.WithUnit("{connection}"),
+	)
+	activeHijackedConnections, _ := meter.Int64UpDownCounter(
+		hijackedConnectionMetricName,
+		metric.WithDescription("Number of active hijacked connections tracked by Servekit."),
+		metric.WithUnit("{connection}"),
+	)
 	return &otelServerMetrics{
 		activeConnections:         activeConnections,
 		activeHijackedConnections: activeHijackedConnections,
@@ -283,38 +342,46 @@ func (c *trackedHijackedConn) Close() error {
 	return err
 }
 
-// newOTelMetricsMiddleware records HTTP request metrics using semconv-aligned
-// short-request buckets with a modest long-tail extension for slower handlers.
+// newOTelMetricsMiddleware records standard HTTP request duration and active
+// request instruments alongside explicitly namespaced Servekit outcome metrics.
 func newOTelMetricsMiddleware(obs observabilityConfig) Middleware {
 	meter := obs.meterProvider.Meter(instrumentationName)
 
-	requestCount, _ := meter.Int64Counter("http.server.request.count", metric.WithUnit("{request}"))
-	duration, _ := meter.Float64Histogram(
-		"http.server.request.duration",
-		metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(
-			0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0,
-			2.5, 5.0, 7.5, 10.0, 15.0, 30.0, 60.0,
-		),
+	duration, _ := httpconv.NewServerRequestDuration(meter)
+	activeRequests, _ := httpconv.NewServerActiveRequests(meter)
+	panicCount, _ := meter.Int64Counter(
+		panicMetricName,
+		metric.WithDescription("Number of HTTP server requests that ended in a panic."),
+		metric.WithUnit("{request}"),
 	)
-	inFlight, _ := meter.Int64UpDownCounter("http.server.request.in_flight", metric.WithUnit("{request}"))
-	panicCount, _ := meter.Int64Counter("http.server.request.panic.count", metric.WithUnit("{panic}"))
-	timeoutCount, _ := meter.Int64Counter("http.server.request.timeout.count", metric.WithUnit("{timeout}"))
-	cancellationCount, _ := meter.Int64Counter("http.server.request.cancellation.count", metric.WithUnit("{request}"))
-	authRejectCount, _ := meter.Int64Counter("http.server.request.auth_rejection.count", metric.WithUnit("{request}"))
+	timeoutCount, _ := meter.Int64Counter(
+		timeoutMetricName,
+		metric.WithDescription("Number of HTTP server requests that exceeded a Servekit endpoint timeout."),
+		metric.WithUnit("{request}"),
+	)
+	cancellationCount, _ := meter.Int64Counter(
+		cancellationMetricName,
+		metric.WithDescription("Number of HTTP server requests canceled by the client."),
+		metric.WithUnit("{request}"),
+	)
+	authRejectCount, _ := meter.Int64Counter(
+		authRejectionMetricName,
+		metric.WithDescription("Number of HTTP server requests rejected by Servekit endpoint authentication."),
+		metric.WithUnit("{request}"),
+	)
 
 	collector := otelMetrics{
-		requestCount:      requestCount,
 		duration:          duration,
-		inFlight:          inFlight,
+		activeRequests:    activeRequests,
 		panicCount:        panicCount,
 		timeoutCount:      timeoutCount,
 		cancellationCount: cancellationCount,
 		authRejectCount:   authRejectCount,
 		enablePanics:      obs.enablePanicCount,
-		customAttrs:       obs.attributes,
+		customAttrs:       obs.metricAttributes,
 		routeExtractor:    obs.routeLabel,
 		skipTelemetry:     obs.skipTelemetry,
+		knownMethods:      obs.knownMethods,
 	}
 
 	return collector.middleware()
@@ -332,21 +399,34 @@ func (m otelMetrics) middleware() Middleware {
 			}
 			r = withMatchedRoute(r)
 			r = withRequestOutcome(r)
-			start := time.Now()
-			route := m.routeExtractor(r)
+			timing := otelTimingFromContext(r.Context())
+			if timing == nil {
+				timing = &otelRequestTiming{start: time.Now()}
+			}
 			rw := captureWriter(w, responseCaptureHooks{})
-			base := metricAttributes(r, route, m.customAttrs)
-			m.inFlight.Add(r.Context(), 1, metric.WithAttributes(base...))
-			defer m.inFlight.Add(r.Context(), -1, metric.WithAttributes(base...))
+			method := normalizedHTTPMethod(r.Method, m.knownMethods)
+			scheme := requestScheme(r)
+			activeAttrs := customAttributes(r, m.customAttrs)
+			m.activeRequests.Add(r.Context(), 1, method, scheme, activeAttrs...)
+			defer m.activeRequests.Add(r.Context(), -1, method, scheme, activeAttrs...)
 			defer func() {
 				rec := recover()
+				end := time.Now()
+				timing.end = end
 				status, statusKnown := completedStatusCode(rw, rec)
 				finalRoute := m.routeExtractor(r)
-				attrs := metricAttributes(r, finalRoute, m.customAttrs)
+				custom := customAttributes(r, m.customAttrs)
+				attrs := servekitMetricAttributes(r, finalRoute, custom, m.knownMethods)
+				durationAttrs := standardDurationAttributes(r, finalRoute, custom)
 				if statusKnown {
 					attrs = append(attrs, semconv.HTTPResponseStatusCode(status))
+					durationAttrs = append(durationAttrs, semconv.HTTPResponseStatusCode(status))
 				}
-				if rec != nil && m.enablePanics {
+				if errorType := responseErrorType(status, statusKnown, rec); errorType != "" {
+					attrs = append(attrs, semconv.ErrorTypeKey.String(errorType))
+					durationAttrs = append(durationAttrs, semconv.ErrorTypeKey.String(errorType))
+				}
+				if rec != nil && rec != http.ErrAbortHandler && m.enablePanics {
 					m.panicCount.Add(r.Context(), 1, metric.WithAttributes(attrs...))
 				}
 				if outcome := requestOutcomeState(r); outcome != nil {
@@ -360,8 +440,7 @@ func (m otelMetrics) middleware() Middleware {
 						m.authRejectCount.Add(r.Context(), 1, metric.WithAttributes(attrs...))
 					}
 				}
-				m.requestCount.Add(r.Context(), 1, metric.WithAttributes(attrs...))
-				m.duration.Record(r.Context(), time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+				m.duration.Record(r.Context(), end.Sub(timing.start).Seconds(), method, scheme, durationAttrs...)
 				if rec != nil {
 					panic(rec)
 				}
@@ -372,50 +451,79 @@ func (m otelMetrics) middleware() Middleware {
 	}
 }
 
-func spanAttributes(r *http.Request, route string, extra func(*http.Request) []attribute.KeyValue) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{
-		semconv.HTTPRequestMethodKey.String(r.Method),
-		semconv.UserAgentOriginal(r.UserAgent()),
+func spanAttributes(r *http.Request, knownMethods map[string]httpconv.RequestMethodAttr) []attribute.KeyValue {
+	var attrs []attribute.KeyValue
+	method := normalizedHTTPMethod(r.Method, knownMethods)
+	attrs = append(attrs,
+		semconv.HTTPRequestMethodKey.String(string(method)),
+		semconv.URLScheme(requestScheme(r)),
+	)
+	if method == httpconv.RequestMethodOther && r.Method != "" {
+		attrs = append(attrs, semconv.HTTPRequestMethodOriginal(r.Method))
 	}
-	if scheme := requestScheme(r); scheme != "" {
-		attrs = append(attrs, semconv.URLScheme(scheme))
+	if r.URL != nil {
+		attrs = append(attrs, semconv.URLPath(r.URL.Path))
 	}
-	if route != "" {
-		attrs = append(attrs, semconv.HTTPRoute(route))
+	if userAgent := r.UserAgent(); userAgent != "" {
+		attrs = append(attrs, semconv.UserAgentOriginal(userAgent))
 	}
-	if extra != nil {
-		attrs = append(attrs, extra(r)...)
+	if version := requestProtocolVersion(r); version != "" {
+		attrs = append(attrs, semconv.NetworkProtocolVersion(version))
 	}
 	return attrs
 }
 
-func metricAttributes(r *http.Request, route string, extra func(*http.Request) []attribute.KeyValue) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{
-		semconv.HTTPRequestMethodKey.String(r.Method),
-	}
-	if scheme := requestScheme(r); scheme != "" {
-		attrs = append(attrs, semconv.URLScheme(scheme))
+func servekitMetricAttributes(r *http.Request, route string, custom []attribute.KeyValue, knownMethods map[string]httpconv.RequestMethodAttr) []attribute.KeyValue {
+	attrs := append([]attribute.KeyValue(nil), custom...)
+	attrs = append(attrs,
+		semconv.HTTPRequestMethodKey.String(string(normalizedHTTPMethod(r.Method, knownMethods))),
+		semconv.URLScheme(requestScheme(r)),
+	)
+	if version := requestProtocolVersion(r); version != "" {
+		attrs = append(attrs, semconv.NetworkProtocolVersion(version))
 	}
 	if route != "" {
 		attrs = append(attrs, semconv.HTTPRoute(route))
 	}
-	if extra != nil {
-		attrs = append(attrs, extra(r)...)
+	return attrs
+}
+
+func standardDurationAttributes(r *http.Request, route string, custom []attribute.KeyValue) []attribute.KeyValue {
+	attrs := append([]attribute.KeyValue(nil), custom...)
+	if version := requestProtocolVersion(r); version != "" {
+		attrs = append(attrs, semconv.NetworkProtocolVersion(version))
+	}
+	if route != "" {
+		attrs = append(attrs, semconv.HTTPRoute(route))
 	}
 	return attrs
+}
+
+func customAttributes(r *http.Request, fn func(*http.Request) []attribute.KeyValue) []attribute.KeyValue {
+	if fn == nil {
+		return nil
+	}
+	return append([]attribute.KeyValue(nil), fn(r)...)
 }
 
 func requestScheme(r *http.Request) string {
-	if r.URL.Scheme != "" {
-		return r.URL.Scheme
-	}
 	if r.TLS != nil {
 		return "https"
 	}
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		return proto
+	return "http"
+}
+
+func requestProtocolVersion(r *http.Request) string {
+	if r.ProtoMajor <= 0 {
+		return ""
 	}
-	return ""
+	if r.ProtoMajor == 1 {
+		return "1." + strconv.Itoa(r.ProtoMinor)
+	}
+	if r.ProtoMinor == 0 {
+		return strconv.Itoa(r.ProtoMajor)
+	}
+	return strconv.Itoa(r.ProtoMajor) + "." + strconv.Itoa(r.ProtoMinor)
 }
 
 func defaultRouteLabel(r *http.Request) string {
@@ -431,11 +539,79 @@ func defaultRouteLabel(r *http.Request) string {
 	return r.Pattern
 }
 
-func defaultSpanName(r *http.Request, route string) string {
-	if route != "" {
-		return r.Method + " " + route
+func formatSpanName(obs observabilityConfig, r *http.Request, route string) string {
+	if obs.spanName != nil {
+		return obs.spanName(r, route)
 	}
-	return r.Method
+	return defaultSpanName(r, route, obs.knownMethods)
+}
+
+func defaultSpanName(r *http.Request, route string, knownMethods map[string]httpconv.RequestMethodAttr) string {
+	method := normalizedHTTPMethod(r.Method, knownMethods)
+	name := string(method)
+	if method == httpconv.RequestMethodOther {
+		name = "HTTP"
+	}
+	if route != "" {
+		return name + " " + route
+	}
+	return name
+}
+
+func normalizedHTTPMethod(method string, knownMethods map[string]httpconv.RequestMethodAttr) httpconv.RequestMethodAttr {
+	if normalized, ok := knownMethods[method]; ok {
+		return normalized
+	}
+	return httpconv.RequestMethodOther
+}
+
+func knownHTTPMethods() map[string]httpconv.RequestMethodAttr {
+	if configured, ok := os.LookupEnv("OTEL_INSTRUMENTATION_HTTP_KNOWN_METHODS"); ok {
+		methods := make(map[string]httpconv.RequestMethodAttr)
+		for _, method := range strings.Split(configured, ",") {
+			if method != "" {
+				methods[method] = httpconv.RequestMethodAttr(method)
+			}
+		}
+		return methods
+	}
+	return map[string]httpconv.RequestMethodAttr{
+		http.MethodConnect: httpconv.RequestMethodConnect,
+		http.MethodDelete:  httpconv.RequestMethodDelete,
+		http.MethodGet:     httpconv.RequestMethodGet,
+		http.MethodHead:    httpconv.RequestMethodHead,
+		http.MethodOptions: httpconv.RequestMethodOptions,
+		http.MethodPatch:   httpconv.RequestMethodPatch,
+		http.MethodPost:    httpconv.RequestMethodPost,
+		http.MethodPut:     httpconv.RequestMethodPut,
+		http.MethodTrace:   httpconv.RequestMethodTrace,
+		"QUERY":            httpconv.RequestMethodQuery,
+	}
+}
+
+func responseErrorType(status int, statusKnown bool, recovered any) string {
+	if recovered == http.ErrAbortHandler {
+		return "http.ErrAbortHandler"
+	}
+	if recovered != nil {
+		return "panic"
+	}
+	if statusKnown && status >= http.StatusInternalServerError {
+		return strconv.Itoa(status)
+	}
+	return ""
+}
+
+type otelRequestTimingKey struct{}
+
+type otelRequestTiming struct {
+	start time.Time
+	end   time.Time
+}
+
+func otelTimingFromContext(ctx context.Context) *otelRequestTiming {
+	timing, _ := ctx.Value(otelRequestTimingKey{}).(*otelRequestTiming)
+	return timing
 }
 
 // TraceIDFromContext returns the active trace ID for the request context.

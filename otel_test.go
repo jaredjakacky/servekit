@@ -3,11 +3,13 @@ package servekit_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/embedded"
 )
@@ -99,12 +101,20 @@ func TestServerOpenTelemetryAppliesSpanOptions(t *testing.T) {
 	t.Parallel()
 
 	tp := newRecordingTracerProvider()
+	mp := newRecordingMeterProvider()
 	s := newOTelTestServer(
 		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
 		servekit.WithRouteLabeler(func(r *http.Request) string { return "custom.route" }),
 		servekit.WithSpanNameFormatter(func(r *http.Request, route string) string { return "span:" + route }),
-		servekit.WithOTelAttributes(func(r *http.Request) []attribute.KeyValue {
-			return []attribute.KeyValue{attribute.String("servekit.test", "yes")}
+		servekit.WithOTelSpanAttributes(func(r *http.Request) []attribute.KeyValue {
+			return []attribute.KeyValue{
+				attribute.String("servekit.span_test", "yes"),
+				attribute.String("servekit.active_span_id", servekit.SpanIDFromContext(r.Context())),
+			}
+		}),
+		servekit.WithOTelMetricAttributes(func(r *http.Request) []attribute.KeyValue {
+			return []attribute.KeyValue{attribute.String("servekit.metric_test", "yes")}
 		}),
 	)
 	s.HandleHTTP(http.MethodGet, "/widgets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,14 +135,233 @@ func TestServerOpenTelemetryAppliesSpanOptions(t *testing.T) {
 	if got := span.Name(); got != "span:custom.route" {
 		t.Fatalf("span name = %q, want %q", got, "span:custom.route")
 	}
-	if got := span.AttributeValue("servekit.test"); got != "yes" {
-		t.Fatalf("servekit.test attribute = %q, want %q", got, "yes")
+	if got := span.AttributeValue("servekit.span_test"); got != "yes" {
+		t.Fatalf("servekit.span_test attribute = %q, want %q", got, "yes")
+	}
+	if got := span.AttributeValue("servekit.metric_test"); got != nil {
+		t.Fatalf("span servekit.metric_test attribute = %q, want omitted", got)
+	}
+	if got := span.AttributeValue("servekit.active_span_id"); got != "0000000000000001" {
+		t.Fatalf("span attribute callback active span ID = %q, want server span ID", got)
 	}
 	if got := span.AttributeValue(string(semconv.HTTPRouteKey)); got != "custom.route" {
 		t.Fatalf("http.route attribute = %q, want %q", got, "custom.route")
 	}
 	if got := span.AttributeValue(string(semconv.HTTPResponseStatusCodeKey)); got != int64(http.StatusCreated) {
 		t.Fatalf("http.response.status_code attribute = %v, want %d", got, http.StatusCreated)
+	}
+	measurements := mp.float64Measurements("http.server.request.duration")
+	if len(measurements) != 1 {
+		t.Fatalf("duration measurements = %d, want 1", len(measurements))
+	}
+	if got := measurements[0].AttributeValue("servekit.metric_test"); got != "yes" {
+		t.Fatalf("metric servekit.metric_test attribute = %q, want %q", got, "yes")
+	}
+	if got := measurements[0].AttributeValue("servekit.span_test"); got != nil {
+		t.Fatalf("metric servekit.span_test attribute = %q, want omitted", got)
+	}
+}
+
+func TestServerOpenTelemetryNormalizesUnknownRequestMethods(t *testing.T) {
+	tp := newRecordingTracerProvider()
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(
+		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
+	)
+	s.HandleHTTP("BREW", "/widgets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := performRequest(t, s.Handler(), "BREW", "/widgets")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	spans := tp.Spans()
+	if len(spans) != 1 {
+		t.Fatalf("recorded spans = %d, want 1", len(spans))
+	}
+	if got := spans[0].Name(); got != "HTTP /widgets" {
+		t.Fatalf("span name = %q, want %q", got, "HTTP /widgets")
+	}
+	if got := spans[0].AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "_OTHER" {
+		t.Fatalf("span http.request.method = %q, want %q", got, "_OTHER")
+	}
+	if got := spans[0].AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != "BREW" {
+		t.Fatalf("span http.request.method_original = %q, want %q", got, "BREW")
+	}
+
+	measurements := mp.float64Measurements("http.server.request.duration")
+	if len(measurements) != 1 {
+		t.Fatalf("duration measurements = %d, want 1", len(measurements))
+	}
+	if got := measurements[0].AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "_OTHER" {
+		t.Fatalf("metric http.request.method = %q, want %q", got, "_OTHER")
+	}
+	if got := measurements[0].AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != nil {
+		t.Fatalf("metric http.request.method_original = %q, want omitted", got)
+	}
+}
+
+func TestServerOpenTelemetryHonorsConfiguredKnownRequestMethods(t *testing.T) {
+	t.Setenv("OTEL_INSTRUMENTATION_HTTP_KNOWN_METHODS", "BREW")
+
+	tp := newRecordingTracerProvider()
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(
+		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
+	)
+	s.HandleHTTP("BREW", "/widgets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	performRequest(t, s.Handler(), "BREW", "/widgets")
+
+	span := tp.Spans()[0]
+	if got := span.Name(); got != "BREW /widgets" {
+		t.Fatalf("span name = %q, want %q", got, "BREW /widgets")
+	}
+	if got := span.AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "BREW" {
+		t.Fatalf("span http.request.method = %q, want %q", got, "BREW")
+	}
+	if got := span.AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != nil {
+		t.Fatalf("span http.request.method_original = %q, want omitted", got)
+	}
+	measurement := mp.float64Measurements("http.server.request.duration")[0]
+	if got := measurement.AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "BREW" {
+		t.Fatalf("metric http.request.method = %q, want %q", got, "BREW")
+	}
+}
+
+func TestServerOpenTelemetryDerivesSchemeFromTransport(t *testing.T) {
+	t.Parallel()
+
+	tp := newRecordingTracerProvider()
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(
+		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
+	)
+	s.HandleHTTP(http.MethodGet, "/scheme", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	tests := []struct {
+		name       string
+		configure  func(*http.Request)
+		wantScheme string
+	}{
+		{
+			name: "plain HTTP ignores forwarded and URL schemes",
+			configure: func(r *http.Request) {
+				r.URL.Scheme = "attacker-controlled"
+				r.Header.Set("X-Forwarded-Proto", "also-attacker-controlled")
+			},
+			wantScheme: "http",
+		},
+		{
+			name: "TLS ignores forwarded scheme",
+			configure: func(r *http.Request) {
+				r.TLS = &tls.ConnectionState{}
+				r.Header.Set("X-Forwarded-Proto", "ftp")
+			},
+			wantScheme: "https",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/scheme", nil)
+			tc.configure(req)
+			s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		})
+	}
+
+	spans := tp.Spans()
+	measurements := mp.float64Measurements("http.server.request.duration")
+	if len(spans) != len(tests) || len(measurements) != len(tests) {
+		t.Fatalf("spans/durations = %d/%d, want %d/%d", len(spans), len(measurements), len(tests), len(tests))
+	}
+	for i, tc := range tests {
+		if got := spans[i].AttributeValue(string(semconv.URLSchemeKey)); got != tc.wantScheme {
+			t.Errorf("%s: span url.scheme = %q, want %q", tc.name, got, tc.wantScheme)
+		}
+		if got := measurements[i].AttributeValue(string(semconv.URLSchemeKey)); got != tc.wantScheme {
+			t.Errorf("%s: metric url.scheme = %q, want %q", tc.name, got, tc.wantScheme)
+		}
+	}
+}
+
+func TestServerOpenTelemetryUsesSemanticConventionRequestInstruments(t *testing.T) {
+	t.Parallel()
+
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(servekit.WithMeterProvider(mp))
+	s.HandleHTTP(http.MethodGet, "/widgets/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	performRequest(t, s.Handler(), http.MethodGet, "/widgets/123")
+
+	duration, ok := mp.instrumentDescriptor("http.server.request.duration")
+	if !ok {
+		t.Fatal("http.server.request.duration instrument was not created")
+	}
+	if duration.kind != "float64 histogram" {
+		t.Errorf("duration kind = %q, want %q", duration.kind, "float64 histogram")
+	}
+	if duration.description != "Duration of HTTP server requests." {
+		t.Errorf("duration description = %q, want semantic-convention description", duration.description)
+	}
+	if duration.unit != "s" {
+		t.Errorf("duration unit = %q, want %q", duration.unit, "s")
+	}
+	wantBuckets := []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
+	if !slices.Equal(duration.boundaries, wantBuckets) {
+		t.Errorf("duration buckets = %v, want %v", duration.boundaries, wantBuckets)
+	}
+
+	active, ok := mp.instrumentDescriptor("http.server.active_requests")
+	if !ok {
+		t.Fatal("http.server.active_requests instrument was not created")
+	}
+	if active.kind != "int64 up-down counter" {
+		t.Errorf("active requests kind = %q, want %q", active.kind, "int64 up-down counter")
+	}
+	if active.description != "Number of active HTTP server requests." {
+		t.Errorf("active requests description = %q, want semantic-convention description", active.description)
+	}
+	if active.unit != "{request}" {
+		t.Errorf("active requests unit = %q, want %q", active.unit, "{request}")
+	}
+	activeMeasurements := mp.int64Measurements("http.server.active_requests")
+	if len(activeMeasurements) != 2 {
+		t.Fatalf("active request measurements = %d, want 2", len(activeMeasurements))
+	}
+	for _, measurement := range activeMeasurements {
+		if got := measurement.AttributeValue(string(semconv.HTTPRequestMethodKey)); got != http.MethodGet {
+			t.Errorf("active request http.request.method = %q, want %q", got, http.MethodGet)
+		}
+		if got := measurement.AttributeValue(string(semconv.URLSchemeKey)); got != "http" {
+			t.Errorf("active request url.scheme = %q, want %q", got, "http")
+		}
+		if got := measurement.AttributeValue(string(semconv.HTTPRouteKey)); got != nil {
+			t.Errorf("active request http.route = %q, want omitted", got)
+		}
+	}
+	durationMeasurements := mp.float64Measurements("http.server.request.duration")
+	if len(durationMeasurements) != 1 {
+		t.Fatalf("duration measurements = %d, want 1", len(durationMeasurements))
+	}
+	if got := durationMeasurements[0].AttributeValue(string(semconv.HTTPRouteKey)); got != "/widgets/{id}" {
+		t.Errorf("duration http.route = %q, want route template %q", got, "/widgets/{id}")
+	}
+
+	for _, obsolete := range []string{"http.server.request.count", "http.server.request.in_flight"} {
+		if _, ok := mp.instrumentDescriptor(obsolete); ok {
+			t.Errorf("obsolete nonstandard instrument %q was created", obsolete)
+		}
 	}
 }
 
@@ -173,14 +402,11 @@ func TestServerOpenTelemetryHandlerModeRecordsRequestMetricsWithoutConnectionMet
 
 	waitForHTTPStatus(t, ts.URL+"/metrics", http.StatusCreated, 500*time.Millisecond)
 
-	if got := len(mp.int64Measurements("http.server.request.count")); got == 0 {
-		t.Fatal("http.server.request.count measurements = 0, want request metrics on Handler() path")
-	}
 	if got := len(mp.float64Measurements("http.server.request.duration")); got == 0 {
 		t.Fatal("http.server.request.duration measurements = 0, want duration metrics on Handler() path")
 	}
-	if got := len(mp.int64Measurements("http.server.connection.active")); got != 0 {
-		t.Fatalf("http.server.connection.active measurements = %d, want none when only Handler() is mounted into an outer server", got)
+	if got := len(mp.int64Measurements("servekit.http.server.connection.active")); got != 0 {
+		t.Fatalf("servekit.http.server.connection.active measurements = %d, want none when only Handler() is mounted into an outer server", got)
 	}
 }
 
@@ -209,11 +435,11 @@ func TestServerOpenTelemetryRunPathRecordsConnectionMetrics(t *testing.T) {
 	if err := waitForRunResult(t, errCh, 2*time.Second); err != nil {
 		t.Fatalf("Run() error = %v, want nil on context cancellation", err)
 	}
-	if got := len(mp.int64Measurements("http.server.request.count")); got == 0 {
-		t.Fatal("http.server.request.count measurements = 0, want request metrics on Run() path")
+	if got := len(mp.float64Measurements("http.server.request.duration")); got == 0 {
+		t.Fatal("http.server.request.duration measurements = 0, want request metrics on Run() path")
 	}
-	if got := len(mp.int64Measurements("http.server.connection.active")); got == 0 {
-		t.Fatal("http.server.connection.active measurements = 0, want connection metrics on Run() path")
+	if got := len(mp.int64Measurements("servekit.http.server.connection.active")); got == 0 {
+		t.Fatal("servekit.http.server.connection.active measurements = 0, want connection metrics on Run() path")
 	}
 }
 
@@ -234,7 +460,7 @@ func TestServerOpenTelemetryRecordsAuthRejectionMetric(t *testing.T) {
 
 	assertInt64Measurement(
 		t,
-		mp.int64Measurements("http.server.request.auth_rejection.count"),
+		mp.int64Measurements("servekit.http.server.request.auth_rejection.count"),
 		1,
 		map[string]any{
 			string(semconv.HTTPRequestMethodKey):      http.MethodGet,
@@ -261,12 +487,13 @@ func TestServerOpenTelemetryRecordsTimeoutMetric(t *testing.T) {
 
 	assertInt64Measurement(
 		t,
-		mp.int64Measurements("http.server.request.timeout.count"),
+		mp.int64Measurements("servekit.http.server.request.timeout.count"),
 		1,
 		map[string]any{
 			string(semconv.HTTPRequestMethodKey):      http.MethodGet,
 			string(semconv.HTTPRouteKey):              "/timeout",
 			string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusGatewayTimeout),
+			string(semconv.ErrorTypeKey):              "504",
 		},
 	)
 }
@@ -310,12 +537,13 @@ func TestServerOpenTelemetryRecordsCancellationMetric(t *testing.T) {
 
 	assertInt64Measurement(
 		t,
-		mp.int64Measurements("http.server.request.cancellation.count"),
+		mp.int64Measurements("servekit.http.server.request.cancellation.count"),
 		1,
 		map[string]any{
 			string(semconv.HTTPRequestMethodKey):      http.MethodGet,
 			string(semconv.HTTPRouteKey):              "/cancel",
 			string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusGatewayTimeout),
+			string(semconv.ErrorTypeKey):              "504",
 		},
 	)
 }
@@ -341,8 +569,12 @@ func TestServerOpenTelemetryPanicMetricCanBeDisabled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			tp := newRecordingTracerProvider()
 			mp := newRecordingMeterProvider()
-			opts := append([]servekit.Option{servekit.WithMeterProvider(mp)}, tc.opts...)
+			opts := append([]servekit.Option{
+				servekit.WithTracerProvider(tp),
+				servekit.WithMeterProvider(mp),
+			}, tc.opts...)
 			s := newOTelTestServer(opts...)
 			s.HandleHTTP(http.MethodGet, "/panic", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				panic("boom")
@@ -353,7 +585,7 @@ func TestServerOpenTelemetryPanicMetricCanBeDisabled(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 			}
 
-			got := mp.int64Measurements("http.server.request.panic.count")
+			got := mp.int64Measurements("servekit.http.server.request.panic.count")
 			if len(got) != tc.wantPanicCount {
 				t.Fatalf("panic count measurements = %d, want %d", len(got), tc.wantPanicCount)
 			}
@@ -366,8 +598,19 @@ func TestServerOpenTelemetryPanicMetricCanBeDisabled(t *testing.T) {
 						string(semconv.HTTPRequestMethodKey):      http.MethodGet,
 						string(semconv.HTTPRouteKey):              "/panic",
 						string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusInternalServerError),
+						string(semconv.ErrorTypeKey):              "panic",
 					},
 				)
+			}
+			spans := tp.Spans()
+			if len(spans) != 1 {
+				t.Fatalf("recorded spans = %d, want 1", len(spans))
+			}
+			if got := spans[0].AttributeValue(string(semconv.ErrorTypeKey)); got != "panic" {
+				t.Fatalf("span error.type = %q, want %q", got, "panic")
+			}
+			if spans[0].status != codes.Error {
+				t.Fatalf("span status = %v, want %v", spans[0].status, codes.Error)
 			}
 		})
 	}
@@ -376,8 +619,12 @@ func TestServerOpenTelemetryPanicMetricCanBeDisabled(t *testing.T) {
 func TestServerOpenTelemetryDoesNotInventStatusForUncommittedAbort(t *testing.T) {
 	t.Parallel()
 
+	tp := newRecordingTracerProvider()
 	mp := newRecordingMeterProvider()
-	s := newOTelTestServer(servekit.WithMeterProvider(mp))
+	s := newOTelTestServer(
+		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
+	)
 	s.HandleHTTP(http.MethodGet, "/abort", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
@@ -389,12 +636,28 @@ func TestServerOpenTelemetryDoesNotInventStatusForUncommittedAbort(t *testing.T)
 		if recovered := recover(); recovered != http.ErrAbortHandler {
 			t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
 		}
-		measurements := mp.int64Measurements("http.server.request.count")
+		measurements := mp.float64Measurements("http.server.request.duration")
 		if len(measurements) != 1 {
 			t.Fatalf("request count measurements = %d, want 1", len(measurements))
 		}
 		if got := measurements[0].AttributeValue(string(semconv.HTTPResponseStatusCodeKey)); got != nil {
 			t.Fatalf("metric http.response.status_code = %v, want omitted for uncommitted abort", got)
+		}
+		if got := measurements[0].AttributeValue(string(semconv.ErrorTypeKey)); got != "http.ErrAbortHandler" {
+			t.Fatalf("metric error.type = %v, want %q", got, "http.ErrAbortHandler")
+		}
+		if got := len(mp.int64Measurements("servekit.http.server.request.panic.count")); got != 0 {
+			t.Fatalf("panic count measurements = %d, want 0 for http.ErrAbortHandler", got)
+		}
+		spans := tp.Spans()
+		if len(spans) != 1 {
+			t.Fatalf("recorded spans = %d, want 1", len(spans))
+		}
+		if got := spans[0].AttributeValue(string(semconv.HTTPResponseStatusCodeKey)); got != nil {
+			t.Fatalf("span http.response.status_code = %v, want omitted for uncommitted abort", got)
+		}
+		if got := spans[0].AttributeValue(string(semconv.ErrorTypeKey)); got != "http.ErrAbortHandler" {
+			t.Fatalf("span error.type = %v, want %q", got, "http.ErrAbortHandler")
 		}
 	}()
 
@@ -423,9 +686,10 @@ func TestServerOpenTelemetryCommittedPanicRetainsObservedStatus(t *testing.T) {
 			string(semconv.HTTPRequestMethodKey):      http.MethodGet,
 			string(semconv.HTTPRouteKey):              "/panic",
 			string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusAccepted),
+			string(semconv.ErrorTypeKey):              "panic",
 		}
-		assertInt64Measurement(t, mp.int64Measurements("http.server.request.count"), 1, wantAttrs)
-		assertInt64Measurement(t, mp.int64Measurements("http.server.request.panic.count"), 1, wantAttrs)
+		assertFloat64Measurement(t, mp.float64Measurements("http.server.request.duration"), wantAttrs)
+		assertInt64Measurement(t, mp.int64Measurements("servekit.http.server.request.panic.count"), 1, wantAttrs)
 	}()
 
 	s.Handler().ServeHTTP(rec, req)
@@ -484,7 +748,7 @@ func TestServerOpenTelemetryRunPathTracksHijackedConnections(t *testing.T) {
 		t.Fatalf("hijacked response = %q, want body %q", string(body), "hijacked")
 	}
 
-	measurements := waitForInt64MeasurementCount(t, mp, "http.server.connection.hijacked.active", 2, 500*time.Millisecond)
+	measurements := waitForInt64MeasurementCount(t, mp, "servekit.http.server.connection.hijacked.active", 2, 500*time.Millisecond)
 	assertInt64Measurement(t, measurements, 1, nil)
 	assertInt64Measurement(t, measurements, -1, nil)
 
@@ -523,7 +787,7 @@ func TestServerOpenTelemetryDoesNotInventStatusForHijackedResponse(t *testing.T)
 		t.Fatalf("span http.response.status_code = %v, want omitted for unobserved hijacked response", got)
 	}
 
-	measurements := mp.int64Measurements("http.server.request.count")
+	measurements := mp.float64Measurements("http.server.request.duration")
 	if len(measurements) != 1 {
 		t.Fatalf("request count measurements = %d, want 1", len(measurements))
 	}
@@ -548,12 +812,14 @@ type recordingMeterProvider struct {
 	mu            sync.Mutex
 	int64ByName   map[string][]int64Measurement
 	float64ByName map[string][]float64Measurement
+	descriptors   map[string]instrumentDescriptor
 }
 
 func newRecordingMeterProvider() *recordingMeterProvider {
 	return &recordingMeterProvider{
 		int64ByName:   make(map[string][]int64Measurement),
 		float64ByName: make(map[string][]float64Measurement),
+		descriptors:   make(map[string]instrumentDescriptor),
 	}
 }
 
@@ -597,20 +863,60 @@ func (p *recordingMeterProvider) float64Measurements(name string) []float64Measu
 	return out
 }
 
+func (p *recordingMeterProvider) recordInstrument(name string, descriptor instrumentDescriptor) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.descriptors[name] = descriptor
+}
+
+func (p *recordingMeterProvider) instrumentDescriptor(name string) (instrumentDescriptor, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	descriptor, ok := p.descriptors[name]
+	descriptor.boundaries = append([]float64(nil), descriptor.boundaries...)
+	return descriptor, ok
+}
+
+type instrumentDescriptor struct {
+	kind        string
+	description string
+	unit        string
+	boundaries  []float64
+}
+
 type recordingMeter struct {
 	metricnoop.Meter
 	provider *recordingMeterProvider
 }
 
-func (m *recordingMeter) Int64Counter(name string, _ ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+func (m *recordingMeter) Int64Counter(name string, opts ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	cfg := metric.NewInt64CounterConfig(opts...)
+	m.provider.recordInstrument(name, instrumentDescriptor{
+		kind:        "int64 counter",
+		description: cfg.Description(),
+		unit:        cfg.Unit(),
+	})
 	return &recordingInt64Counter{provider: m.provider, name: name}, nil
 }
 
-func (m *recordingMeter) Int64UpDownCounter(name string, _ ...metric.Int64UpDownCounterOption) (metric.Int64UpDownCounter, error) {
+func (m *recordingMeter) Int64UpDownCounter(name string, opts ...metric.Int64UpDownCounterOption) (metric.Int64UpDownCounter, error) {
+	cfg := metric.NewInt64UpDownCounterConfig(opts...)
+	m.provider.recordInstrument(name, instrumentDescriptor{
+		kind:        "int64 up-down counter",
+		description: cfg.Description(),
+		unit:        cfg.Unit(),
+	})
 	return &recordingInt64UpDownCounter{provider: m.provider, name: name}, nil
 }
 
-func (m *recordingMeter) Float64Histogram(name string, _ ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
+func (m *recordingMeter) Float64Histogram(name string, opts ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
+	cfg := metric.NewFloat64HistogramConfig(opts...)
+	m.provider.recordInstrument(name, instrumentDescriptor{
+		kind:        "float64 histogram",
+		description: cfg.Description(),
+		unit:        cfg.Unit(),
+		boundaries:  append([]float64(nil), cfg.ExplicitBucketBoundaries()...),
+	})
 	return &recordingFloat64Histogram{provider: m.provider, name: name}, nil
 }
 
@@ -787,6 +1093,15 @@ type float64Measurement struct {
 	attrs []attribute.KeyValue
 }
 
+func (m float64Measurement) AttributeValue(key string) any {
+	for _, kv := range m.attrs {
+		if string(kv.Key) == key {
+			return valueAsAny(kv.Value)
+		}
+	}
+	return nil
+}
+
 func cloneMeasurementAttrs(set attribute.Set) []attribute.KeyValue {
 	attrs := set.ToSlice()
 	out := make([]attribute.KeyValue, len(attrs))
@@ -814,6 +1129,25 @@ func assertInt64Measurement(t *testing.T, measurements []int64Measurement, wantV
 	}
 
 	t.Fatalf("measurements = %#v, want value %d with attrs %v", measurements, wantValue, wantAttrs)
+}
+
+func assertFloat64Measurement(t *testing.T, measurements []float64Measurement, wantAttrs map[string]any) {
+	t.Helper()
+
+	for _, measurement := range measurements {
+		matched := true
+		for key, want := range wantAttrs {
+			if got := measurement.AttributeValue(key); got != want {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return
+		}
+	}
+
+	t.Fatalf("measurements = %#v, want attrs %v", measurements, wantAttrs)
 }
 
 func waitForInt64MeasurementCount(t *testing.T, mp *recordingMeterProvider, name string, want int, timeout time.Duration) []int64Measurement {

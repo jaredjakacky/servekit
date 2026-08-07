@@ -127,7 +127,8 @@ s := servekit.New(
 	servekit.WithTracerProvider(tp),
 	servekit.WithMeterProvider(mp),
 	servekit.WithPropagator(propagator),
-	servekit.WithOTelAttributes(extraAttrs),
+	servekit.WithOTelSpanAttributes(spanAttrs),
+	servekit.WithOTelMetricAttributes(metricAttrs),
 	servekit.WithSpanNameFormatter(spanNamer),
 	servekit.WithRouteLabeler(routeLabeler),
 )
@@ -211,7 +212,8 @@ Available hooks:
 - `WithTracerProvider(...)`
 - `WithMeterProvider(...)`
 - `WithPropagator(...)`
-- `WithOTelAttributes(...)`
+- `WithOTelSpanAttributes(...)`
+- `WithOTelMetricAttributes(...)`
 - `WithSpanNameFormatter(...)`
 - `WithRouteLabeler(...)`
 - `WithOTelPanicMetricEnabled(...)`
@@ -221,8 +223,15 @@ These are useful when:
 - the host application installs its own providers
 - span names should follow a house convention
 - routes need a custom low-cardinality label strategy
-- extra request attributes belong on spans and metrics
+- investigative request attributes belong on spans
+- bounded dimensions belong on metrics
 - panic counting should be enabled or disabled explicitly
+
+Keep metric attributes and custom route labels low-cardinality. Request IDs,
+tenant IDs, and raw URLs belong on spans or logs, not metrics. Servekit derives
+the built-in `url.scheme` from the actual request transport and does not trust
+forwarded-protocol headers without an application-owned proxy trust policy.
+Custom span names should also use bounded operation names or route templates.
 
 The important distinction:
 

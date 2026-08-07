@@ -332,17 +332,21 @@ Servekit's default path already includes request-level tracing and metrics. On t
 
   Sets the text-map propagator used to extract incoming trace context. When unset, Servekit uses `otel.GetTextMapPropagator()`.
 
-- `WithOTelAttributes(fn func(*http.Request) []attribute.KeyValue)`
+- `WithOTelSpanAttributes(fn func(*http.Request) []attribute.KeyValue)`
 
-  Appends request-derived attributes to spans and metrics.
+  Appends request-derived attributes to server spans. Span-only identifiers and other investigative values belong here.
+
+- `WithOTelMetricAttributes(fn func(*http.Request) []attribute.KeyValue)`
+
+  Appends request-derived attributes to built-in request metrics. Values must come from a bounded, low-cardinality set; do not use request IDs, tenant IDs, or raw URLs.
 
 - `WithSpanNameFormatter(fn func(*http.Request, string) string)`
 
-  Overrides span naming.
+  Overrides span naming. Keep names bounded; prefer route templates over raw paths or arbitrary request methods.
 
 - `WithRouteLabeler(fn func(*http.Request) string)`
 
-  Overrides the low-cardinality route label used for spans and metrics.
+  Overrides the low-cardinality route label used for spans and metrics. It must return a bounded route template, not a concrete request path.
 
 - `WithOTelPanicMetricEnabled(enabled bool)`
 
