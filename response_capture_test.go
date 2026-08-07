@@ -225,6 +225,10 @@ func TestServerAbortsCommittedPanicResponse(t *testing.T) {
 	if got := string(body); got != "partial" {
 		t.Fatalf("response body = %q, want %q", got, "partial")
 	}
+	// The interrupted response can become visible to the client before the
+	// server goroutine has finished recovery logging. Wait for the request to
+	// complete before inspecting buffers written by that goroutine.
+	server.Close()
 	if got := appLogs.String(); !strings.Contains(got, "panic observed") || !strings.Contains(got, "panic=boom") {
 		t.Fatalf("Servekit logs = %q, want original panic", got)
 	}
