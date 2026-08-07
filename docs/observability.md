@@ -117,7 +117,8 @@ Available server options:
 - `WithTracerProvider(...)`
 - `WithMeterProvider(...)`
 - `WithPropagator(...)`
-- `WithOTelAttributes(...)`
+- `WithOTelSpanAttributes(...)`
+- `WithOTelMetricAttributes(...)`
 - `WithSpanNameFormatter(...)`
 - `WithRouteLabeler(...)`
 - `WithOTelPanicMetricEnabled(...)`
@@ -128,6 +129,29 @@ Two common integration modes are:
 
 1. the host application installs global OTel providers and propagators, and Servekit uses those defaults
 2. the server overrides providers, propagators, attributes, span naming, or route labels with Servekit options
+
+Span and metric attribute customization are separate intentionally. Span-only
+values can include identifiers useful for investigating one request. Metric
+attributes must remain low-cardinality: use only values from a bounded set, and
+never attach request IDs, tenant IDs, raw URLs, or similar unbounded values with
+`WithOTelMetricAttributes(...)`. `WithRouteLabeler(...)` also affects metrics,
+so it must return a bounded route template rather than the concrete request
+path. Custom span names should likewise use normalized operation names or route
+templates rather than raw paths or arbitrary request methods.
+
+Servekit normalizes `http.request.method` to the semantic-convention set of
+known, case-sensitive methods. Other values become `_OTHER` for spans and
+metrics; spans additionally retain the original value as
+`http.request.method_original`. Set
+`OTEL_INSTRUMENTATION_HTTP_KNOWN_METHODS` to a comma-separated full replacement
+list when an application has a bounded set of custom methods.
+
+`url.scheme` reflects the connection Servekit actually observes: `https` when
+the request has TLS state and `http` otherwise. Servekit does not trust
+`X-Forwarded-Proto` because the package has no proxy-trust policy. A trusted
+proxy may still preserve its external scheme in span-only application
+attributes after validating the proxy boundary, but it should not replace the
+transport scheme on built-in metrics.
 
 The repository's [`examples/basic`](../examples/basic) example leaves provider
 installation to the host application, which keeps the smallest service focused
@@ -155,17 +179,22 @@ against the same dependency versions as the package they demonstrate.
 
 Servekit's built-in request metrics include:
 
-- `http.server.request.count`
 - `http.server.request.duration`
-- `http.server.request.in_flight`
-- `http.server.request.panic.count`
-- `http.server.request.timeout.count`
-- `http.server.request.cancellation.count`
-- `http.server.request.auth_rejection.count`
+- `http.server.active_requests`
+- `servekit.http.server.request.panic.count`
+- `servekit.http.server.request.timeout.count`
+- `servekit.http.server.request.cancellation.count`
+- `servekit.http.server.request.auth_rejection.count`
 
-`http.server.request.duration` uses second-based histogram buckets with fine
-resolution for ordinary request latency and extra buckets at 15s, 30s, and 60s
-for slower long-tail requests.
+The two `http.server.*` instruments are constructed from OpenTelemetry's current
+HTTP semantic-convention helpers, including their standard descriptions, units,
+attributes, and explicit duration buckets. Use the histogram aggregation count
+from `http.server.request.duration` for request volume; Servekit does not emit a
+nonstandard `http.server.request.count` instrument.
+
+Servekit-specific outcome counters use the `servekit.*` namespace so they do
+not imply standard OpenTelemetry semantics. An explicit `http.ErrAbortHandler`
+is recorded as an errored request but is not counted as a Servekit panic.
 
 ## `Run(...)` versus `Handler()`
 
@@ -178,13 +207,13 @@ That means mounting `Handler()` into your own `http.Server` still preserves requ
 
 Servekit's built-in connection metrics are:
 
-- `http.server.connection.active`
-- `http.server.connection.hijacked.active`
+- `servekit.http.server.connection.active`
+- `servekit.http.server.connection.hijacked.active`
 
 Connection metrics have one extra wrinkle for hijacked connections:
 
-- `http.server.connection.active` covers non-hijacked connections still managed by the normal `net/http` lifecycle
-- `http.server.connection.hijacked.active` covers hijacked connections that remain open under handler-owned lifecycle management
+- `servekit.http.server.connection.active` covers non-hijacked connections still managed by the normal `net/http` lifecycle
+- `servekit.http.server.connection.hijacked.active` covers hijacked connections that remain open under handler-owned lifecycle management
 
 That split exists because `http.Server.ConnState` alone is not enough to track the lifetime of a successfully hijacked connection after control leaves the normal server flow.
 

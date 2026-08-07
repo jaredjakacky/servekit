@@ -76,8 +76,8 @@ func main() {
 	log.Println(`  curl -i http://127.0.0.1:8090/slow`)
 	log.Println("watch stdout for:")
 	log.Println(`  - spans named like "GET /widgets/{id}"`)
-	log.Println(`  - request metrics such as http.server.request.count`)
-	log.Println(`  - connection metrics such as http.server.connection.active while /slow is in flight`)
+	log.Println(`  - standard request metrics such as http.server.request.duration and http.server.active_requests`)
+	log.Println(`  - Servekit connection metrics such as servekit.http.server.connection.active while /slow is in flight`)
 
 	if err := s.Run(ctx); err != nil {
 		log.Printf("serve: %v", err)
