@@ -373,6 +373,64 @@ func TestServerOpenTelemetryPanicMetricCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestServerOpenTelemetryDoesNotInventStatusForUncommittedAbort(t *testing.T) {
+	t.Parallel()
+
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(servekit.WithMeterProvider(mp))
+	s.HandleHTTP(http.MethodGet, "/abort", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/abort", nil)
+
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+		}
+		measurements := mp.int64Measurements("http.server.request.count")
+		if len(measurements) != 1 {
+			t.Fatalf("request count measurements = %d, want 1", len(measurements))
+		}
+		if got := measurements[0].AttributeValue(string(semconv.HTTPResponseStatusCodeKey)); got != nil {
+			t.Fatalf("metric http.response.status_code = %v, want omitted for uncommitted abort", got)
+		}
+	}()
+
+	s.Handler().ServeHTTP(rec, req)
+}
+
+func TestServerOpenTelemetryCommittedPanicRetainsObservedStatus(t *testing.T) {
+	t.Parallel()
+
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(servekit.WithMeterProvider(mp))
+	s.HandleHTTP(http.MethodGet, "/panic", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, "partial")
+		panic("boom")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+		}
+		wantAttrs := map[string]any{
+			string(semconv.HTTPRequestMethodKey):      http.MethodGet,
+			string(semconv.HTTPRouteKey):              "/panic",
+			string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusAccepted),
+		}
+		assertInt64Measurement(t, mp.int64Measurements("http.server.request.count"), 1, wantAttrs)
+		assertInt64Measurement(t, mp.int64Measurements("http.server.request.panic.count"), 1, wantAttrs)
+	}()
+
+	s.Handler().ServeHTTP(rec, req)
+}
+
 func TestServerOpenTelemetryRunPathTracksHijackedConnections(t *testing.T) {
 	addr := reserveLoopbackAddr(t)
 	mp := newRecordingMeterProvider()

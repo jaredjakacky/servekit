@@ -24,8 +24,9 @@ func main() {
 		// Real SSE routes are often intentionally long-lived, so the default
 		// server write timeout is frequently too short.
 		servekit.WithWriteTimeout(0),
-		// For partial streams, abort-style semantics are usually more correct
-		// than trying to synthesize a fallback JSON 500 mid-stream.
+		// Default recovery already aborts panics after a stream is committed.
+		// This option also chooses abort semantics for a panic before the first
+		// event is written instead of returning a fallback JSON 500.
 		servekit.WithPanicPropagation(true),
 	)
 

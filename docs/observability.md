@@ -68,7 +68,7 @@ best-effort.
 
 `Recovery(logger, propagate)` handles panics inside the HTTP request flow.
 
-The default Servekit path installs `Recovery(..., false)`, so recovered requests do not re-panic unless you opt into propagation explicitly.
+The default Servekit path installs `Recovery(..., false)`. It contains normal panics only while the response is uncommitted; committed responses are transport-aborted.
 
 One implementation detail is worth knowing: inner observability middleware such as access logging and OTel may recover and re-panic internally while the panic unwinds so they can record logs, spans, and metrics. The outer `Recovery` middleware still decides the final default outcome.
 
@@ -76,8 +76,8 @@ Default mode:
 
 - log the panic and stack trace
 - if the response has not been committed yet, write a best-effort JSON `500` in the default error shape, including `request_id` when available
-- if the response has already been committed, leave the observed status and body alone
-- return normally
+- if the response has already been committed, re-panic with `http.ErrAbortHandler` so `net/http` aborts the incomplete response or stream
+- preserve an incoming `http.ErrAbortHandler` without logging it or trying to write a fallback response
 
 Propagation mode:
 
@@ -85,7 +85,11 @@ Propagation mode:
 - re-panic with `http.ErrAbortHandler`
 - do not try to write a fallback body
 
-Enable propagation with `WithPanicPropagation(true)` when abort-style transport semantics are more correct than a fallback JSON `500`, such as with streaming or proxy-style handlers.
+Enable propagation with `WithPanicPropagation(true)` when normal panics should use abort-style transport semantics even before response commitment. In both modes, an incoming `http.ErrAbortHandler` is preserved without additional panic logging.
+
+For committed panics, access logs retain the status and byte count already observed before the abort. OTel records the normal panic as an error before Recovery converts it to `http.ErrAbortHandler`. An uncommitted explicit abort has no invented HTTP response status.
+
+After a successful hijack, the handler owns the connection. Recovery still propagates `http.ErrAbortHandler`, but connection cleanup remains the handler's responsibility.
 
 If recovery is disabled entirely with `WithRecoveryEnabled(false)`, Servekit does not install the outer `Recovery` middleware. Panics still escape to the surrounding server or test harness, although inner observability middleware may briefly recover and re-panic so they can record logs, spans, or metrics.
 

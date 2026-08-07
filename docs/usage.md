@@ -69,20 +69,21 @@ That keeps the service lifecycle small without the caller having to wire shutdow
 
 ### Panic behavior
 
-By default, panics do not escape the Servekit handler stack.
+By default, Servekit contains normal panics only while it can still produce a coherent error response.
 
-Servekit installs recovery middleware in contain-and-continue mode. In that default mode it:
+Servekit installs recovery middleware in commitment-aware mode. By default it:
 
 - logs the panic and stack trace
 - writes a best-effort JSON `500` in the default error shape if the response is still uncommitted, including `request_id` when available
-- leaves already-committed responses alone
+- re-panics with `http.ErrAbortHandler` after response commitment so `net/http` aborts the incomplete response or stream
+- preserves an incoming `http.ErrAbortHandler` without logging it or attempting a fallback response
 - lets access logs and request metrics report the observed outcome
 
 That fallback does not go through a server's custom `ErrorEncoder`; recovery intentionally uses a fixed default JSON error shape.
 
 One nuance matters: access logging and OTel middleware may recover and re-panic internally while the panic unwinds so they can record the request outcome. The outer recovery middleware still decides the final result.
 
-Use `WithPanicPropagation(true)` when abort-style transport behavior is more correct than a fallback JSON `500`, such as with streaming or proxying.
+Use `WithPanicPropagation(true)` when every normal panic should use abort-style transport behavior, including panics that occur before response commitment. The default already aborts normal panics after commitment.
 
 Use `WithRecoveryEnabled(false)` only when you truly want panics to escape to the surrounding `net/http` server. In that mode, inner access-log and OTel middleware may still recover and re-panic briefly so they can record the request outcome first.
 

@@ -278,8 +278,11 @@ func hijackWithTracking(capture *responseCapture, hijacker http.Hijacker, trackH
 	return trackHijack(conn), rw, nil
 }
 
-func completedStatusCode(w capturedResponseWriter, panicked bool) (int, bool) {
-	if panicked && !w.Committed() {
+func completedStatusCode(w capturedResponseWriter, recovered any) (int, bool) {
+	if recovered == http.ErrAbortHandler && !w.Committed() {
+		return 0, false
+	}
+	if recovered != nil && !w.Committed() {
 		return http.StatusInternalServerError, true
 	}
 	if w.Hijacked() && !w.finalStatusWritten() {
