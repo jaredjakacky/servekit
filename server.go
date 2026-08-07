@@ -191,7 +191,8 @@ func (s *Server) Handler() http.Handler {
 // has already been set explicitly, and initiates graceful shutdown when ctx is
 // canceled or SIGINT/SIGTERM is received. During shutdown readiness is set
 // false, optional drain delay is applied, then http.Server.Shutdown runs with
-// WithShutdownTimeout.
+// WithShutdownTimeout. If graceful shutdown fails, Run force-closes remaining
+// ordinary server-owned connections and waits for the serve loop to exit.
 //
 // Run marks the server ready immediately once the listener is accepting
 // connections, before any application-level warmup. If your service requires
@@ -208,8 +209,12 @@ func (s *Server) Handler() http.Handler {
 // server slog handler into the stdlib *log.Logger shape that net/http expects.
 // Users can override that logger explicitly with WithHTTPServerErrorLog.
 //
-// Run returns wrapped listen/shutdown errors or the serve loop error.
+// Run returns joined, wrapped listen, serve, shutdown, and forced-close errors
+// when more than one lifecycle operation fails. Hijacked connections remain
+// handler-owned and are not closed by net/http.Server.Shutdown or Close.
 func (s *Server) Run(ctx context.Context) error {
+	defer s.ready.Store(false)
+
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -257,14 +262,36 @@ func (s *Server) Run(ctx context.Context) error {
 			time.Sleep(s.drainDelay)
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("shutdown: %w", err)
+		shutdownErr := httpServer.Shutdown(shutdownCtx)
+		cancel()
+
+		var closeErr error
+		if shutdownErr != nil {
+			closeErr = httpServer.Close()
 		}
-		return <-serverErr
-	case err := <-serverErr:
-		return err
+		serveErr := <-serverErr
+		return errors.Join(
+			wrapRunError("shutdown", shutdownErr),
+			wrapRunError("close", closeErr),
+			wrapRunError("serve", serveErr),
+		)
+	case serveErr := <-serverErr:
+		if serveErr == nil {
+			return nil
+		}
+		closeErr := httpServer.Close()
+		return errors.Join(
+			wrapRunError("serve", serveErr),
+			wrapRunError("close", closeErr),
+		)
 	}
+}
+
+func wrapRunError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (s *Server) serverMetricsCollector() *otelServerMetrics {

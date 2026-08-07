@@ -10,8 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -678,6 +681,7 @@ func TestServerRunReturnsWrappedListenError(t *testing.T) {
 	t.Parallel()
 
 	s := newBlackBoxServer(servekit.WithAddr("bad addr"))
+	s.SetReady(true)
 
 	err := s.Run(context.Background())
 	if err == nil {
@@ -685,6 +689,186 @@ func TestServerRunReturnsWrappedListenError(t *testing.T) {
 	}
 	if got := err.Error(); len(got) < len("listen:") || got[:len("listen:")] != "listen:" {
 		t.Fatalf("Run() error = %q, want prefix %q", got, "listen:")
+	}
+	if s.Ready() {
+		t.Fatal("Ready() = true after listen failure, want false")
+	}
+}
+
+func TestServerRunWaitsForActiveRequestDuringGracefulShutdown(t *testing.T) {
+	addr := reserveLoopbackAddr(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	s := newBlackBoxServer(
+		servekit.WithAddr(addr),
+		servekit.WithShutdownTimeout(2*time.Second),
+	)
+	s.HandleHTTP(http.MethodGet, "/work", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErrCh := make(chan error, 1)
+	go func() { runErrCh <- s.Run(ctx) }()
+
+	waitForHTTPStatus(t, "http://"+addr+"/readyz", http.StatusOK, 2*time.Second)
+	requestErrCh := make(chan error, 1)
+	go func() {
+		resp, err := (&http.Client{Timeout: 3 * time.Second}).Get("http://" + addr + "/work")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		requestErrCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("active request did not reach handler")
+	}
+	cancel()
+
+	select {
+	case err := <-runErrCh:
+		t.Fatalf("Run() returned before active request completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	released = true
+	if err := <-requestErrCh; err != nil {
+		t.Fatalf("active request error = %v, want graceful completion", err)
+	}
+	if err := waitForRunResult(t, runErrCh, 2*time.Second); err != nil {
+		t.Fatalf("Run() error = %v, want nil after graceful completion", err)
+	}
+	if s.Ready() {
+		t.Fatal("Ready() = true after graceful shutdown, want false")
+	}
+}
+
+func TestServerRunForceClosesConnectionAfterShutdownTimeout(t *testing.T) {
+	addr := reserveLoopbackAddr(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	s := newBlackBoxServer(
+		servekit.WithAddr(addr),
+		servekit.WithShutdownTimeout(50*time.Millisecond),
+	)
+	s.HandleHTTP(http.MethodGet, "/stuck", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		_, _ = io.WriteString(w, "too late")
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErrCh := make(chan error, 1)
+	go func() { runErrCh <- s.Run(ctx) }()
+
+	waitForHTTPStatus(t, "http://"+addr+"/readyz", http.StatusOK, 2*time.Second)
+	requestErrCh := make(chan error, 1)
+	go func() {
+		resp, err := (&http.Client{Timeout: 3 * time.Second}).Get("http://" + addr + "/stuck")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		requestErrCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stuck request did not reach handler")
+	}
+	cancel()
+
+	runErr := waitForRunResult(t, runErrCh, 2*time.Second)
+	if !errors.Is(runErr, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want context deadline exceeded", runErr)
+	}
+	if s.Ready() {
+		t.Fatal("Ready() = true after timed-out shutdown, want false")
+	}
+	if conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond); err == nil {
+		_ = conn.Close()
+		t.Fatal("new connection succeeded after Run returned")
+	}
+
+	select {
+	case err := <-requestErrCh:
+		if err == nil {
+			t.Fatal("active request completed without a transport error after forced close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active request connection remained open after Run returned")
+	}
+
+	close(release)
+	released = true
+}
+
+func TestServerRunStopsOnSIGTERM(t *testing.T) {
+	addr := reserveLoopbackAddr(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServerRunSIGTERMHelper$")
+	cmd.Env = append(os.Environ(), "SERVEKIT_SIGTERM_HELPER=1", "SERVEKIT_SIGTERM_ADDR="+addr)
+	output := &bytes.Buffer{}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start SIGTERM helper: %v", err)
+	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+	processDone := false
+	defer func() {
+		if !processDone {
+			_ = cmd.Process.Kill()
+			<-waitCh
+		}
+	}()
+
+	waitForHTTPStatus(t, "http://"+addr+"/readyz", http.StatusOK, 2*time.Second)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal SIGTERM helper: %v", err)
+	}
+
+	select {
+	case err := <-waitCh:
+		processDone = true
+		if err != nil {
+			t.Fatalf("SIGTERM helper error = %v, output: %s", err, output.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("SIGTERM helper did not exit, output: %s", output.String())
+	}
+}
+
+func TestServerRunSIGTERMHelper(t *testing.T) {
+	if os.Getenv("SERVEKIT_SIGTERM_HELPER") != "1" {
+		return
+	}
+
+	s := newBlackBoxServer(servekit.WithAddr(os.Getenv("SERVEKIT_SIGTERM_ADDR")))
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error after SIGTERM = %v", err)
 	}
 }
 

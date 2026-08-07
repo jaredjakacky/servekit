@@ -92,7 +92,7 @@ func main() {
 }
 ```
 
-`Run()` starts the server on the configured address, which defaults to `:8080`, marks it ready once it begins serving, and handles shutdown on cancellation or `SIGINT` / `SIGTERM`.
+`Run()` starts the server on the configured address, which defaults to `:8080`, marks it ready once it begins serving, and handles shutdown on cancellation or `SIGINT` / `SIGTERM`. It always clears readiness before returning and force-closes ordinary server-owned connections if graceful shutdown fails or times out.
 
 That one server already gives you:
 

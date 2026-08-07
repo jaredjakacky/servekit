@@ -76,7 +76,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `Run(...)`
 
-  Standard lifecycle path. It listens on the configured address, builds the handler stack, marks readiness on startup unless readiness was set explicitly, and performs graceful shutdown on context cancellation or `SIGINT` / `SIGTERM`.
+  Standard lifecycle path. It listens on the configured address, builds the handler stack, marks readiness on startup unless readiness was set explicitly, and performs graceful shutdown on context cancellation or `SIGINT` / `SIGTERM`. Every exit clears readiness. Failed graceful shutdown is followed by forced closure of ordinary server-owned connections and a joined serve loop.
 
 - `Handler()`
 
@@ -206,7 +206,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithShutdownTimeout(timeout time.Duration)`
 
-  Sets the timeout used for graceful shutdown. Default: `15s`.
+  Sets the timeout used for graceful shutdown. If it expires, `Run` force-closes remaining ordinary server-owned connections. Default: `15s`.
 
 - `WithShutdownDrainDelay(delay time.Duration)`
 
