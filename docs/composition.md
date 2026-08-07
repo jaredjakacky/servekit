@@ -77,8 +77,10 @@ decision. Readiness is evaluated in this order:
 The lifecycle gate remains first so startup, explicit readiness, drain delay,
 and shutdown remain under Servekit's control.
 
-The readiness response exposes only the aggregate decision and reason. It does
-not serialize component identities, states, reasons, or messages.
+The readiness response exposes only the aggregate decision and a stable generic
+reason. It does not serialize Opskit component identities, states, reasons, or
+messages, or errors returned by `WithReadinessChecks(...)`. Custom readiness
+check errors are logged at debug level for internal diagnosis.
 
 Adding `WithOpsAdmin()` exposes two generic, read-only component routes:
 

@@ -68,12 +68,16 @@ func TestServerHandlerDefaultProbeEndpoints(t *testing.T) {
 	assertJSONField(t, readyzReady, "status", "ready")
 }
 
-func TestServerHandlerReadyzIncludesReadinessCheckFailureReason(t *testing.T) {
+func TestServerHandlerReadyzRedactsReadinessCheckFailure(t *testing.T) {
 	t.Parallel()
 
+	const failure = "dial tcp db.internal.example:5432: authentication failed for user payments"
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	s := newBlackBoxServer(
+		servekit.WithLogger(logger),
 		servekit.WithReadinessChecks(func(context.Context) error {
-			return errors.New("database unavailable")
+			return errors.New(failure)
 		}),
 	)
 	s.SetReady(true)
@@ -84,7 +88,16 @@ func TestServerHandlerReadyzIncludesReadinessCheckFailureReason(t *testing.T) {
 		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 	assertJSONField(t, rec, "status", "not_ready")
-	assertJSONField(t, rec, "reason", "database unavailable")
+	assertJSONField(t, rec, "reason", "one or more readiness checks failed")
+	if strings.Contains(rec.Body.String(), "db.internal.example") || strings.Contains(rec.Body.String(), "payments") {
+		t.Fatalf("/readyz body = %s, want no readiness check details", rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "readiness check failed") || !strings.Contains(logs.String(), failure) {
+		t.Fatalf("debug logs = %q, want readiness failure details", logs.String())
+	}
+	if !strings.Contains(logs.String(), "check_index=0") {
+		t.Fatalf("debug logs = %q, want failing readiness check index", logs.String())
+	}
 }
 
 func TestServerHandlerReadyzOmitsOpskitComponentDetails(t *testing.T) {
@@ -210,7 +223,7 @@ func TestServerHandlerReadyzRunsReadinessChecksAfterOpskitReady(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "legacy check failed")
+	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more readiness checks failed")
 	if got := checkCalls.Load(); got != 1 {
 		t.Fatalf("readiness check called %d times, want 1", got)
 	}

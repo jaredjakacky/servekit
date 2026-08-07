@@ -92,7 +92,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `ReadinessCheck`
 
-  Lightweight readiness predicate used by the built-in `/readyz` endpoint. Returning an error marks the service not ready. It should read local or cached state rather than perform active dependency checks.
+  Lightweight readiness predicate used by the built-in `/readyz` endpoint. Returning an error marks the service not ready. Servekit logs the error at debug level and returns a stable generic reason instead of exposing the error text. The predicate should read local or cached state rather than perform active dependency checks.
 
   Shape: `func(context.Context) error`
 
@@ -258,7 +258,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithReadinessChecks(checks ...ReadinessCheck)`
 
-  Appends lightweight predicates evaluated by the built-in `/readyz` endpoint after Servekit lifecycle readiness and, when configured, Opskit readiness. For composed Kit Series services, prefer an Opskit registry as the shared readiness path.
+  Appends lightweight predicates evaluated by the built-in `/readyz` endpoint after Servekit lifecycle readiness and, when configured, Opskit readiness. Failure details are debug-logged and replaced by a stable generic reason in the public response. For composed Kit Series services, prefer an Opskit registry as the shared readiness path.
 
 - `WithOps(registry *opskit.Registry, opts ...OpsOption)`
 
