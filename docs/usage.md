@@ -52,7 +52,7 @@ Default behavior:
 
 If the handler needs explicit HTTP status control, return `servekit.Error(...)` or an `HTTPError`.
 
-One tradeoff to know about the default JSON path: Servekit writes successful JSON responses with normal `net/http` streaming semantics instead of buffering the full payload first. That keeps the common path lightweight, but it also means a rare late JSON encoding failure can happen after `200 OK` is already committed.
+The default JSON encoder serializes the complete success body before committing `200 OK`. If serialization fails, Servekit can still return the configured error response. Use `HandleHTTP` when an endpoint needs streaming or other direct response semantics.
 
 Plain Go errors still work. The distinction is:
 

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,30 @@ func TestHandleHTTPExplicitStatusIsLoggedWithBytes(t *testing.T) {
 	}
 	if !strings.Contains(logText, "bytes=4") {
 		t.Fatalf("logs = %q, want bytes=4", logText)
+	}
+}
+
+func TestHandleEncodingFailureIsLoggedWithErrorStatusAndBytes(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	s := newResponseCaptureServer(&logs)
+	s.Handle(http.MethodGet, "/bad", func(r *http.Request) (any, error) {
+		return make(chan int), nil
+	})
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/bad")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	logText := logs.String()
+	if !strings.Contains(logText, "status=500") {
+		t.Fatalf("logs = %q, want status=500", logText)
+	}
+	wantBytes := "bytes=" + strconv.Itoa(rec.Body.Len())
+	if !strings.Contains(logText, wantBytes) {
+		t.Fatalf("logs = %q, want %s", logText, wantBytes)
 	}
 }
 

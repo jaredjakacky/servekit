@@ -1,6 +1,7 @@
 package servekit_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,9 @@ func TestJSONResponse(t *testing.T) {
 		if got := rec.Header().Get("Content-Type"); got != "application/json" {
 			t.Fatalf("Content-Type = %q, want %q", got, "application/json")
 		}
+		if got := rec.Body.String(); got != "{\"data\":{\"name\":\"servekit\",\"ok\":true}}\n" {
+			t.Fatalf("body = %q, want wrapped JSON with trailing newline", got)
+		}
 
 		var body map[string]map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -65,26 +69,47 @@ func TestJSONResponse(t *testing.T) {
 		}
 	})
 
-	t.Run("unsupported payload returns error after committing default success status", func(t *testing.T) {
+	t.Run("unsupported payload returns error without committing response", func(t *testing.T) {
 		t.Parallel()
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		rec := httptest.NewRecorder()
+		rec := &responseWriteRecorder{header: make(http.Header)}
 
 		err := servekit.JSONResponse()(rec, req, make(chan int))
 		if err == nil {
 			t.Fatal("JSONResponse() error = nil, want non-nil")
 		}
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		if len(rec.statuses) != 0 {
+			t.Fatalf("committed statuses = %v, want none", rec.statuses)
 		}
-		if got := rec.Body.String(); got != "" {
+		if rec.writeCalls != 0 {
+			t.Fatalf("Write calls = %d, want 0", rec.writeCalls)
+		}
+		if got := rec.body.String(); got != "" {
 			t.Fatalf("body = %q, want empty", got)
 		}
-		if got := rec.Header().Get("Content-Type"); got != "application/json" {
-			t.Fatalf("Content-Type = %q, want %q", got, "application/json")
+		if got := rec.Header().Get("Content-Type"); got != "" {
+			t.Fatalf("Content-Type = %q, want empty", got)
 		}
 	})
+}
+
+type responseWriteRecorder struct {
+	header     http.Header
+	statuses   []int
+	body       bytes.Buffer
+	writeCalls int
+}
+
+func (r *responseWriteRecorder) Header() http.Header { return r.header }
+
+func (r *responseWriteRecorder) WriteHeader(code int) {
+	r.statuses = append(r.statuses, code)
+}
+
+func (r *responseWriteRecorder) Write(p []byte) (int, error) {
+	r.writeCalls++
+	return r.body.Write(p)
 }
 
 func TestJSONError(t *testing.T) {

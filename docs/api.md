@@ -56,7 +56,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `JSONResponse()`
 
-  Default success encoder. `nil` payloads become `204 No Content`. Non-`nil` payloads become `200 OK` with JSON shaped like `{"data": ...}`.
+  Default success encoder. `nil` payloads become `204 No Content`. Non-`nil` payloads are serialized before committing `200 OK` and use JSON shaped like `{"data": ...}`.
 
 - `JSONError()`
 
