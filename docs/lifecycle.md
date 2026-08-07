@@ -40,7 +40,7 @@ Default behavior:
 - before readiness is true, `/readyz` returns `503 Service Unavailable`
 - once the server is ready, `/readyz` returns `200 OK`
 - if `WithOps(...)` is configured and Opskit readiness is not ready, `/readyz` returns `503 Service Unavailable` with an aggregate reason
-- if a standalone readiness predicate fails, `/readyz` returns `503 Service Unavailable` with a `reason`
+- if a standalone readiness predicate fails, `/readyz` returns `503 Service Unavailable` with a stable, generic `reason`
 
 ## Opskit readiness
 
@@ -83,7 +83,21 @@ Each `ReadinessCheck` returns:
 - `nil` when that dependency is ready
 - a non-`nil` error when it is not
 
-If any check fails, Servekit reports the service as not ready and includes the error text in the JSON response.
+If any check fails, Servekit reports the service as not ready with a stable public response:
+
+```json
+{
+  "status": "not_ready",
+  "reason": "one or more readiness checks failed"
+}
+```
+
+Servekit logs the original error at debug level with the failing check's
+zero-based registration index. It does not expose arbitrary error text through
+the unauthenticated probe. Avoid putting credentials or other secrets in these
+errors because application logs still require their own access controls. If an
+outage needs higher-visibility logging, log readiness state transitions in the
+component or background process that owns the state rather than on every probe.
 
 `WithReadinessChecks(...)` remains the standalone readiness hook for small services that do not need an Opskit registry. When `WithOps(...)` is configured, these predicates run after Opskit readiness succeeds. They should read fast local or cached state; they should not perform network probes or expensive active work. For composed Kit Series services, prefer cached component readiness through Opskit and run active dependency checks outside the probe path.
 

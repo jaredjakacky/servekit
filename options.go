@@ -96,7 +96,8 @@ func WithCORSConfig(cfg CORSConfig) Option {
 }
 
 // WithReadinessChecks appends lightweight predicates evaluated by the built-in
-// /readyz endpoint after lifecycle and configured Opskit readiness.
+// /readyz endpoint after lifecycle and configured Opskit readiness. Failure
+// details are debug-logged and replaced by a generic public reason.
 func WithReadinessChecks(checks ...ReadinessCheck) Option {
 	return func(s *Server) {
 		s.readinessChecks = append(s.readinessChecks, checks...)

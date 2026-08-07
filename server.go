@@ -30,6 +30,8 @@ const (
 	defaultRequestBodyLimit  int64 = 4 << 20 // 4 MiB
 )
 
+const readinessCheckFailureReason = "one or more readiness checks failed"
+
 // Server bootstraps an HTTP service with production-oriented defaults.
 //
 // Server keeps net/http as the execution model while providing explicit hooks
@@ -356,12 +358,15 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if s.writeOpsReadinessFailure(w, r) {
 		return
 	}
-	for _, check := range s.readinessChecks {
+	for i, check := range s.readinessChecks {
 		if err := check(r.Context()); err != nil {
-			s.logger.Debug("readiness check failed", slog.Any("error", err))
+			s.logger.Debug("readiness check failed",
+				slog.Int("check_index", i),
+				slog.Any("error", err),
+			)
 			writeStatusJSON(w, http.StatusServiceUnavailable, map[string]any{
 				"status": "not_ready",
-				"reason": err.Error(),
+				"reason": readinessCheckFailureReason,
 			})
 			return
 		}
