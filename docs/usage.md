@@ -63,7 +63,7 @@ That keeps the handler contract simple without forcing every route to write its 
 
 ### `Run`
 
-`Run(ctx)` is the standard lifecycle path. It builds the final handler stack, starts the listener, marks readiness when startup completes unless readiness was set explicitly, and performs graceful shutdown when `ctx` is canceled or the process receives `SIGINT` or `SIGTERM`.
+`Run(ctx)` is the standard lifecycle path. It builds the final handler stack, starts the listener, marks readiness when startup completes unless readiness was set explicitly, and performs graceful shutdown when `ctx` is canceled or the process receives `SIGINT` or `SIGTERM`. Every terminal path clears readiness. If graceful shutdown fails or times out, Servekit force-closes remaining ordinary server-owned connections and joins the serve loop before returning.
 
 That keeps the service lifecycle small without the caller having to wire shutdown, readiness transitions, and a standard `http.Server` manually.
 

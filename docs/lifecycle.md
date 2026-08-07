@@ -107,8 +107,12 @@ Use this when your service has warmup work, cache priming, data sync, or other s
 3. mark readiness true unless readiness was already set explicitly
 4. serve requests until shutdown starts
 5. on shutdown, mark readiness false and call `http.Server.Shutdown`
+6. if graceful shutdown fails or times out, force-close remaining ordinary connections
+7. wait for the serve loop to exit before returning
 
 `Run` also listens for `SIGINT` and `SIGTERM`, so the common `main` path can stay small.
+Readiness is forced false on every terminal `Run` path, including listen and
+serve-loop failures.
 
 ## Graceful shutdown
 
@@ -122,8 +126,18 @@ Shutdown behavior is:
 1. readiness flips false
 2. optional drain delay waits so upstream load balancers can observe `/readyz` go false
 3. graceful shutdown begins with the configured timeout
+4. if graceful shutdown returns an error, `http.Server.Close` force-closes remaining ordinary server-owned connections
+5. the serve loop is joined
+6. shutdown, forced-close, and unexpected serve errors are preserved together
 
 This pattern is especially useful in containerized or load-balanced environments.
+
+The forced-close fallback cannot terminate arbitrary Go code. A handler that
+ignores its request context, connection errors, and every application shutdown
+signal may keep its goroutine alive even after its client connection is closed.
+Hijacked connections such as WebSockets are also handler-owned and remain
+outside `http.Server.Shutdown` and `http.Server.Close`; handlers must notify and
+close them explicitly.
 
 ## `/healthz`
 

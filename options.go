@@ -281,7 +281,9 @@ func WithMaxHeaderBytes(n int) Option {
 	}
 }
 
-// WithShutdownTimeout sets the timeout used for graceful shutdown.
+// WithShutdownTimeout sets the timeout used for graceful shutdown. If the
+// timeout expires, Run force-closes remaining ordinary server-owned
+// connections before returning.
 func WithShutdownTimeout(timeout time.Duration) Option {
 	return func(s *Server) {
 		s.shutdownTimeout = timeout

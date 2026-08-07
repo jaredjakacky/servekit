@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os/signal"
@@ -53,30 +55,58 @@ func main() {
 	// this example does not use Run().
 	go func() {
 		log.Println("warming dependencies for 2 seconds before advertising readiness")
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
 		s.SetReady(true)
 		log.Println("server marked ready")
 	}()
 
+	// The application owns graceful shutdown and forced-close fallback when it
+	// owns the outer http.Server instead of using Servekit's Run method.
+	shutdownErrCh := make(chan error, 1)
 	go func() {
-		log.Printf("external-server example listening on %s", addr)
-		log.Println("try:")
-		log.Printf("  curl -i http://127.0.0.1%s/readyz", addr)
-		log.Printf("  curl -i http://127.0.0.1%s/legacy", addr)
-		log.Printf("  curl -i http://127.0.0.1%s/hello", addr)
-		log.Printf("  curl -i http://127.0.0.1%s/version", addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("external server listen: %v", err)
+		<-ctx.Done()
+		s.SetReady(false)
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		cancel()
+
+		var closeErr error
+		if shutdownErr != nil {
+			closeErr = server.Close()
 		}
+		shutdownErrCh <- errors.Join(
+			wrapLifecycleError("shutdown", shutdownErr),
+			wrapLifecycleError("close", closeErr),
+		)
 	}()
 
-	<-ctx.Done()
-	s.SetReady(false)
-
-	// Shutdown timing is also owned by the outer server path in this mode.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("external server shutdown: %v", err)
+	log.Printf("external-server example listening on %s", addr)
+	log.Println("try:")
+	log.Printf("  curl -i http://127.0.0.1%s/readyz", addr)
+	log.Printf("  curl -i http://127.0.0.1%s/legacy", addr)
+	log.Printf("  curl -i http://127.0.0.1%s/hello", addr)
+	log.Printf("  curl -i http://127.0.0.1%s/version", addr)
+	serveErr := server.ListenAndServe()
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	} else if serveErr != nil {
+		serveErr = fmt.Errorf("serve: %w", serveErr)
+		stop()
 	}
+
+	if err := errors.Join(serveErr, <-shutdownErrCh); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func wrapLifecycleError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
