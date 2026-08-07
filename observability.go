@@ -110,7 +110,7 @@ func AccessLog(logger *slog.Logger) Middleware {
 						slog.String("method", r.Method),
 						slog.String("path", r.URL.Path),
 					}
-					if status, ok := completedStatusCode(rw, rec != nil); ok {
+					if status, ok := completedStatusCode(rw, rec); ok {
 						args = append(args, slog.Int("status", status))
 					}
 					if rw.Hijacked() {
@@ -153,12 +153,11 @@ func SkipAccessLog() Middleware {
 // Recovery logs panics and then applies one of two mutually exclusive
 // strategies.
 //
-// By default, with propagate set to false, Recovery uses contain-and-continue
-// behavior: it logs the original panic value and stack trace, writes a
-// best-effort JSON 500 in Servekit's default error shape when the response is
-// still uncommitted, and then returns normally. When a request ID is already
-// available, Recovery includes it in that fallback body. This keeps panic
-// handling at the HTTP layer for ordinary request/response handlers.
+// By default, with propagate set to false, Recovery logs normal panics and
+// writes a best-effort JSON 500 when the response is still uncommitted. Once a
+// response is committed, it re-panics with http.ErrAbortHandler so net/http
+// aborts the response instead of finalizing a potentially incomplete body.
+// When a request ID is available, Recovery includes it in the fallback body.
 //
 // When propagate is true, Recovery switches to transport-abort propagation:
 // it still logs the original panic value and stack trace, but it does not
@@ -166,6 +165,9 @@ func SkipAccessLog() Middleware {
 // That mode is useful when a team wants net/http abort semantics, such as for
 // streaming or proxy-style handlers, without also getting the standard
 // library's own panic stack-trace logging at the server boundary.
+//
+// Recovery always preserves an incoming http.ErrAbortHandler without logging
+// it or attempting a fallback response.
 func Recovery(logger *slog.Logger, propagate bool) Middleware {
 	if logger == nil {
 		logger = slog.Default()
@@ -174,15 +176,18 @@ func Recovery(logger *slog.Logger, propagate bool) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rw := captureWriter(w, responseCaptureHooks{})
 			defer func() {
-				if rec := recover(); rec != nil {
-					logger.Error("panic observed", slog.Any("panic", rec), slog.String("stack", string(debug.Stack())))
-					if propagate {
-						panic(http.ErrAbortHandler)
-					}
-					if !rw.Committed() {
-						_ = writeDefaultJSONError(rw, http.StatusInternalServerError, "internal server error", recoveryFallbackRequestID(rw, r))
-					}
+				rec := recover()
+				if rec == nil {
+					return
 				}
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
+				logger.Error("panic observed", slog.Any("panic", rec), slog.String("stack", string(debug.Stack())))
+				if propagate || rw.Committed() {
+					panic(http.ErrAbortHandler)
+				}
+				_ = writeDefaultJSONError(rw, http.StatusInternalServerError, "internal server error", recoveryFallbackRequestID(rw, r))
 			}()
 			next.ServeHTTP(rw, r)
 		})

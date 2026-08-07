@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -155,7 +156,7 @@ func TestHandleHTTPFlushBeforeWriteHeaderCommitsImplicitOK(t *testing.T) {
 	}
 }
 
-func TestRecoveryDoesNotWriteFallbackAfterFlush(t *testing.T) {
+func TestRecoveryAbortsAfterFlush(t *testing.T) {
 	t.Parallel()
 
 	handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,16 +166,70 @@ func TestRecoveryDoesNotWriteFallbackAfterFlush(t *testing.T) {
 
 	rec := newFlushRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/flush-panic", nil)
-	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if rec.writeHeaderCalls != 1 {
+			t.Fatalf("WriteHeader call count = %d, want 1", rec.writeHeaderCalls)
+		}
+		if rec.Body.Len() != 0 {
+			t.Fatalf("body = %q, want no recovery fallback after Flush", rec.Body.String())
+		}
+	}()
+
+	handler.ServeHTTP(rec, req)
+}
+
+func TestServerAbortsCommittedPanicResponse(t *testing.T) {
+	t.Parallel()
+
+	var appLogs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&appLogs, nil))
+	s := servekit.New(
+		servekit.WithLogger(logger),
+		servekit.WithDefaultEndpointsEnabled(false),
+		servekit.WithOpenTelemetryEnabled(false),
+		servekit.WithAccessLogEnabled(false),
+		servekit.WithRequestIDEnabled(false),
+		servekit.WithCorrelationIDEnabled(false),
+	)
+	s.HandleHTTP(http.MethodGet, "/panic", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		panic("boom")
+	}))
+
+	var serverLogs bytes.Buffer
+	server := httptest.NewUnstartedServer(s.Handler())
+	server.Config.ErrorLog = log.New(&serverLogs, "", 0)
+	server.Start()
+	defer server.Close()
+
+	resp, err := server.Client().Get(server.URL + "/panic")
+	if err != nil {
+		t.Fatalf("GET committed panic route: %v", err)
 	}
-	if rec.writeHeaderCalls != 1 {
-		t.Fatalf("WriteHeader call count = %d, want 1", rec.writeHeaderCalls)
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr == nil {
+		t.Fatal("response body read error = nil, want transport interruption")
 	}
-	if rec.Body.Len() != 0 {
-		t.Fatalf("body = %q, want no recovery fallback after Flush", rec.Body.String())
+	if got := string(body); got != "partial" {
+		t.Fatalf("response body = %q, want %q", got, "partial")
+	}
+	if got := appLogs.String(); !strings.Contains(got, "panic observed") || !strings.Contains(got, "panic=boom") {
+		t.Fatalf("Servekit logs = %q, want original panic", got)
+	}
+	if serverLogs.Len() != 0 {
+		t.Fatalf("net/http server logs = %q, want none for ErrAbortHandler", serverLogs.String())
 	}
 }
 
@@ -247,7 +302,7 @@ func TestHandleHTTPPreservesHijackerCapability(t *testing.T) {
 	}
 }
 
-func TestRecoveryDoesNotWriteFallbackAfterSuccessfulHijack(t *testing.T) {
+func TestRecoveryPropagatesAbortAfterSuccessfulHijack(t *testing.T) {
 	t.Parallel()
 
 	handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -261,17 +316,23 @@ func TestRecoveryDoesNotWriteFallbackAfterSuccessfulHijack(t *testing.T) {
 
 	writer := newHijackRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/hijack-panic", nil)
-	handler.ServeHTTP(writer, req)
 
-	if !writer.hijacked {
-		t.Fatal("Hijack() was not called")
-	}
-	if writer.writeHeaderCalls != 0 {
-		t.Fatalf("WriteHeader call count = %d, want 0 after successful Hijack", writer.writeHeaderCalls)
-	}
-	if writer.writeCalls != 0 {
-		t.Fatalf("Write call count = %d, want 0 after successful Hijack", writer.writeCalls)
-	}
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+		}
+		if !writer.hijacked {
+			t.Fatal("Hijack() was not called")
+		}
+		if writer.writeHeaderCalls != 0 {
+			t.Fatalf("WriteHeader call count = %d, want 0 after successful Hijack", writer.writeHeaderCalls)
+		}
+		if writer.writeCalls != 0 {
+			t.Fatalf("Write call count = %d, want 0 after successful Hijack", writer.writeCalls)
+		}
+	}()
+
+	handler.ServeHTTP(writer, req)
 }
 
 func TestRecoveryWritesFallbackAfterFailedHijack(t *testing.T) {

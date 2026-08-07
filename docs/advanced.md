@@ -161,10 +161,13 @@ Relevant hooks:
 For streaming, SSE, reverse proxying, and other long-lived responses:
 
 - `HandleHTTP(...)` is usually the right route API
-- `WithPanicPropagation(true)` may be more correct than writing a fallback JSON `500`
+- default recovery aborts normal panics after response commitment and preserves `http.ErrAbortHandler`
+- `WithPanicPropagation(true)` additionally aborts normal panics before commitment instead of writing fallback JSON `500`
 - `WithWriteTimeout(0)` or another workload-specific value may be necessary if the response is intentionally long-lived
 
 In propagation mode, recovery still logs the original panic and stack trace, but it re-panics with `http.ErrAbortHandler` instead of trying to write a fallback body.
+
+An incoming `http.ErrAbortHandler`, including the sentinel used by `httputil.ReverseProxy` for response-copy failures, is always preserved without additional panic logging.
 
 If recovery is disabled with `WithRecoveryEnabled(false)`, Servekit does not install the outer recovery middleware. Panics still escape to the surrounding server behavior, although inner access-log and OTel middleware may briefly recover and re-panic so they can record the request outcome first.
 

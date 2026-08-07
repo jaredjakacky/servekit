@@ -189,7 +189,7 @@ func otelTracingMiddleware(obs observabilityConfig) Middleware {
 					}
 				}
 				rec := recover()
-				status, statusKnown := completedStatusCode(rw, rec != nil)
+				status, statusKnown := completedStatusCode(rw, rec)
 				if statusKnown {
 					span.SetAttributes(semconv.HTTPResponseStatusCode(status))
 				}
@@ -340,7 +340,7 @@ func (m otelMetrics) middleware() Middleware {
 			defer m.inFlight.Add(r.Context(), -1, metric.WithAttributes(base...))
 			defer func() {
 				rec := recover()
-				status, statusKnown := completedStatusCode(rw, rec != nil)
+				status, statusKnown := completedStatusCode(rw, rec)
 				finalRoute := m.routeExtractor(r)
 				attrs := metricAttributes(r, finalRoute, m.customAttrs)
 				if statusKnown {

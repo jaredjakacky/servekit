@@ -158,7 +158,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `Recovery(...)`
 
-  Panic recovery middleware. In default mode it logs the panic and writes a best-effort JSON `500` when possible. In propagation mode it logs the panic and re-panics with `http.ErrAbortHandler` instead of writing a fallback body.
+  Panic recovery middleware. In default mode it logs normal panics, writes a best-effort JSON `500` before response commitment, and transport-aborts after commitment. In propagation mode it transport-aborts normal panics regardless of commitment. An incoming `http.ErrAbortHandler` is always preserved without additional panic logging.
 
 - `RequestIDFromContext(...)`
 
@@ -298,7 +298,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithPanicPropagation(enabled bool)`
 
-  Switches recovery between default contain-and-continue mode and abort-style propagation with `http.ErrAbortHandler`.
+  Makes normal panics use abort-style propagation with `http.ErrAbortHandler` even before response commitment. Default recovery already aborts committed responses.
 
 - `WithAccessLogEnabled(enabled bool)`
 

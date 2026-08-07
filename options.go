@@ -153,9 +153,10 @@ func WithHealthHandler(handler http.Handler) Option {
 // The default is true.
 //
 // When enabled, Servekit installs Recovery around the handler stack. With the
-// default WithPanicPropagation(false), recovered requests do not re-panic:
-// Recovery logs the original panic value and stack trace, writes a best-effort
-// JSON 500 when the response is still uncommitted, and then returns normally.
+// default WithPanicPropagation(false), Recovery logs normal panics and writes a
+// best-effort JSON 500 when the response is still uncommitted. After response
+// commitment, it re-panics with http.ErrAbortHandler so net/http aborts the
+// incomplete response.
 //
 // WithPanicPropagation(true) changes only that recovery behavior. In that
 // mode Recovery still logs the original panic, but it does not attempt a
@@ -172,14 +173,15 @@ func WithRecoveryEnabled(enabled bool) Option {
 	}
 }
 
-// WithPanicPropagation switches Recovery between contain-and-continue mode and
-// transport-abort propagation mode.
+// WithPanicPropagation switches Recovery between commitment-aware recovery and
+// full transport-abort propagation mode.
 //
 // This option only has an effect when recovery middleware is enabled.
 //
-// The default is false. In that mode recovered requests do not re-panic:
-// Recovery logs the original panic value and stack trace, writes a best-effort
-// JSON 500 when the response is still uncommitted, and then returns normally.
+// The default is false. In that mode Recovery logs normal panics and writes a
+// best-effort JSON 500 when the response is still uncommitted. After response
+// commitment, it re-panics with http.ErrAbortHandler so net/http aborts the
+// incomplete response.
 //
 // When enabled is true, Recovery switches to the mutually exclusive propagate
 // mode. In that mode it still logs the original panic value and stack trace,
@@ -188,6 +190,9 @@ func WithRecoveryEnabled(enabled bool) Option {
 // connection-abort semantics from net/http, such as preserving streaming or
 // proxy behavior, while still suppressing the standard library's own panic
 // stack-trace logging at the server boundary.
+//
+// Recovery preserves an incoming http.ErrAbortHandler without logging it in
+// either mode.
 func WithPanicPropagation(enabled bool) Option {
 	return func(s *Server) {
 		s.panicPropagation = enabled

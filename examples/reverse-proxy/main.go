@@ -89,9 +89,10 @@ func main() {
 	//
 	// This demo keeps Servekit's default write timeout because the proxied
 	// response is short-lived. For long-lived proxy traffic, choose
-	// WithWriteTimeout(...) together with the proxy Transport timeouts, and
-	// consider WithPanicPropagation(true) when connection-abort semantics are
-	// more correct than a fallback JSON 500.
+	// WithWriteTimeout(...) together with the proxy Transport timeouts. Servekit
+	// preserves the http.ErrAbortHandler sentinel used by ReverseProxy for copy
+	// failures; WithPanicPropagation(true) can additionally force other panics
+	// to abort even before the response is committed.
 	s.HandleHTTP(http.MethodGet, "/upstream", proxy)
 
 	log.Println("reverse proxy example listening on :8084")

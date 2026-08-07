@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -245,6 +246,61 @@ func TestAccessLogMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 	})
+
+	t.Run("logs committed panic with observed status and bytes", func(t *testing.T) {
+		t.Parallel()
+
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+		handler := servekit.AccessLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, "partial")
+			panic("boom")
+		}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+
+		defer func() {
+			if recovered := recover(); recovered != "boom" {
+				t.Fatalf("recovered panic = %v, want %q", recovered, "boom")
+			}
+			logText := logs.String()
+			if !strings.Contains(logText, "status=202") || !strings.Contains(logText, "bytes=7") {
+				t.Fatalf("logs = %q, want committed status and bytes", logText)
+			}
+		}()
+
+		handler.ServeHTTP(rec, req)
+	})
+
+	t.Run("does not invent status for uncommitted abort", func(t *testing.T) {
+		t.Parallel()
+
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+		handler := servekit.AccessLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic(http.ErrAbortHandler)
+		}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/abort", nil)
+
+		defer func() {
+			if recovered := recover(); recovered != http.ErrAbortHandler {
+				t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+			}
+			logText := logs.String()
+			if !strings.Contains(logText, "path=/abort") || !strings.Contains(logText, "bytes=0") {
+				t.Fatalf("logs = %q, want aborted request path and byte count", logText)
+			}
+			if strings.Contains(logText, "status=") {
+				t.Fatalf("logs = %q, want no invented status for uncommitted abort", logText)
+			}
+		}()
+
+		handler.ServeHTTP(rec, req)
+	})
 }
 
 func TestRecoveryMiddleware(t *testing.T) {
@@ -308,26 +364,87 @@ func TestRecoveryMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("contain and continue leaves committed response untouched", func(t *testing.T) {
+	t.Run("default mode aborts after committed headers", func(t *testing.T) {
 		t.Parallel()
 
 		handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusAccepted)
+			panic("boom")
+		}))
+
+		writer := &trackingResponseWriter{header: make(http.Header)}
+		req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+
+		defer func() {
+			if recovered := recover(); recovered != http.ErrAbortHandler {
+				t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+			}
+			if writer.writeHeaderCalls != 1 {
+				t.Fatalf("WriteHeader call count = %d, want 1", writer.writeHeaderCalls)
+			}
+			if writer.writeCalls != 0 {
+				t.Fatalf("Write call count = %d, want 0", writer.writeCalls)
+			}
+		}()
+
+		handler.ServeHTTP(writer, req)
+	})
+
+	t.Run("default mode aborts after committed body", func(t *testing.T) {
+		t.Parallel()
+
+		handler := servekit.Recovery(nil, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, "partial")
 			panic("boom")
 		}))
 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/panic", nil)
-		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusAccepted {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
-		}
-		if got := rec.Body.String(); got != "partial" {
-			t.Fatalf("body = %q, want %q", got, "partial")
-		}
+		defer func() {
+			if recovered := recover(); recovered != http.ErrAbortHandler {
+				t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if got := rec.Body.String(); got != "partial" {
+				t.Fatalf("body = %q, want %q", got, "partial")
+			}
+		}()
+
+		handler.ServeHTTP(rec, req)
 	})
+
+	for _, propagate := range []bool{false, true} {
+		propagate := propagate
+		t.Run("preserves ErrAbortHandler/propagate="+strconv.FormatBool(propagate), func(t *testing.T) {
+			t.Parallel()
+
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			handler := servekit.Recovery(logger, propagate)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				panic(http.ErrAbortHandler)
+			}))
+
+			writer := &trackingResponseWriter{header: make(http.Header)}
+			req := httptest.NewRequest(http.MethodGet, "/abort", nil)
+
+			defer func() {
+				if recovered := recover(); recovered != http.ErrAbortHandler {
+					t.Fatalf("recovered panic = %v, want %v", recovered, http.ErrAbortHandler)
+				}
+				if logs.Len() != 0 {
+					t.Fatalf("recovery logs = %q, want none", logs.String())
+				}
+				if writer.writeHeaderCalls != 0 || writer.writeCalls != 0 {
+					t.Fatalf("WriteHeader/Write calls = %d/%d, want 0/0", writer.writeHeaderCalls, writer.writeCalls)
+				}
+			}()
+
+			handler.ServeHTTP(writer, req)
+		})
+	}
 
 	t.Run("propagate mode aborts without fallback write", func(t *testing.T) {
 		t.Parallel()
@@ -353,6 +470,43 @@ func TestRecoveryMiddleware(t *testing.T) {
 
 		handler.ServeHTTP(writer, req)
 	})
+}
+
+func TestServerRecoveryDisabledPreservesPanics(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		panicValue any
+	}{
+		{name: "normal panic", panicValue: "boom"},
+		{name: "abort handler", panicValue: http.ErrAbortHandler},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := servekit.New(
+				servekit.WithDefaultEndpointsEnabled(false),
+				servekit.WithRecoveryEnabled(false),
+				servekit.WithOpenTelemetryEnabled(false),
+				servekit.WithAccessLogEnabled(false),
+				servekit.WithRequestIDEnabled(false),
+				servekit.WithCorrelationIDEnabled(false),
+			)
+			s.HandleHTTP(http.MethodGet, "/panic", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				panic(tc.panicValue)
+			}))
+
+			defer func() {
+				if recovered := recover(); recovered != tc.panicValue {
+					t.Fatalf("recovered panic = %v, want %v", recovered, tc.panicValue)
+				}
+			}()
+
+			s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/panic", nil))
+		})
+	}
 }
 
 type trackingResponseWriter struct {

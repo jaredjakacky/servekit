@@ -109,7 +109,7 @@ That one server already gives you:
 
 When the service needs application-specific policy on top of that baseline, add global middleware with `WithMiddleware(...)` or route-local behavior with `WithEndpointMiddleware(...)` rather than replacing the whole setup.
 
-By default, panic recovery logs the panic and stack trace, returns a best-effort JSON `500` when the response is still uncommitted, and leaves committed responses alone.
+By default, panic recovery logs normal panics and returns a best-effort JSON `500` when the response is still uncommitted. After commitment, Servekit aborts the response so clients do not mistake a truncated body for a complete result. An incoming `http.ErrAbortHandler` is preserved without additional panic logging.
 
 In practice, you get a real HTTP baseline without hand-building the `http.Server` lifecycle, middleware stack, probes, IDs, telemetry, and default request/response behavior yourself.
 
