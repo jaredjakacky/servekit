@@ -28,20 +28,24 @@ type ErrorEncoder func(http.ResponseWriter, *http.Request, error) error
 //
 // A nil payload writes HTTP 204 No Content with no body. A non-nil payload
 // writes HTTP 200 with Content-Type application/json and body shape
-// {"data": <payload>}. JSONResponse writes directly to the ResponseWriter using
-// normal net/http response semantics. If JSON encoding fails after the success
-// status has been committed, Handle will still call the server ErrorEncoder,
-// but the error response may not be able to replace the already-committed
-// success status.
+// {"data": <payload>}. JSONResponse serializes the complete response before
+// committing HTTP 200 so Handle can delegate serialization failures to the
+// server ErrorEncoder.
 func JSONResponse() ResponseEncoder {
 	return func(w http.ResponseWriter, _ *http.Request, payload any) error {
 		if payload == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return nil
 		}
+		body, err := json.Marshal(map[string]any{"data": payload})
+		if err != nil {
+			return err
+		}
+		body = append(body, '\n')
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		return json.NewEncoder(w).Encode(map[string]any{"data": payload})
+		_, err = w.Write(body)
+		return err
 	}
 }
 

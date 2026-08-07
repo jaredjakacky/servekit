@@ -28,7 +28,7 @@ func TestHandleRegistersHandlerFuncRoute(t *testing.T) {
 	assertHandlerJSONPathString(t, rec.Body.Bytes(), "data.message", "hi")
 }
 
-func TestHandleRoutesResponseEncodingFailureAfterCommittedSuccessStatus(t *testing.T) {
+func TestHandleRoutesResponseEncodingFailureThroughErrorEncoder(t *testing.T) {
 	t.Parallel()
 
 	s := newHandlerTestServer()
@@ -38,10 +38,21 @@ func TestHandleRoutesResponseEncodingFailureAfterCommittedSuccessStatus(t *testi
 
 	rec := performRequest(t, s.Handler(), http.MethodGet, "/bad")
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want %q", got, "application/json")
 	}
 	assertHandlerJSONPathString(t, rec.Body.Bytes(), "error", "internal server error")
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode JSON body: %v", err)
+	}
+	if _, ok := body["data"]; ok {
+		t.Fatal("response contains success data after encoding failure")
+	}
 }
 
 func TestHandleHTTPRegistersRawHandlerRoute(t *testing.T) {

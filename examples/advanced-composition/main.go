@@ -222,14 +222,20 @@ func houseSuccessEncoder(w http.ResponseWriter, r *http.Request, payload any) er
 		w.WriteHeader(http.StatusNoContent)
 		return nil
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	return json.NewEncoder(w).Encode(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"ok":         true,
 		"data":       payload,
 		"request_id": servekit.RequestIDFromContext(r.Context()),
 		"trace_id":   servekit.TraceIDFromContext(r.Context()),
 	})
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(body)
+	return err
 }
 
 func houseErrorEncoder(w http.ResponseWriter, r *http.Request, err error) error {
