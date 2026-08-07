@@ -110,7 +110,7 @@ func AccessLog(logger *slog.Logger) Middleware {
 						slog.String("method", r.Method),
 						slog.String("path", r.URL.Path),
 					}
-					if status, ok := completedStatusCode(rw, rec); ok {
+					if status, ok := observedStatusCode(rw, rec); ok {
 						args = append(args, slog.Int("status", status))
 					}
 					if rw.Hijacked() {

@@ -278,7 +278,7 @@ func hijackWithTracking(capture *responseCapture, hijacker http.Hijacker, trackH
 	return trackHijack(conn), rw, nil
 }
 
-func completedStatusCode(w capturedResponseWriter, recovered any) (int, bool) {
+func observedStatusCode(w capturedResponseWriter, recovered any) (int, bool) {
 	if recovered == http.ErrAbortHandler && !w.Committed() {
 		return 0, false
 	}
