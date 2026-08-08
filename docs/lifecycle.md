@@ -66,7 +66,7 @@ When Opskit is not ready, the response stays intentionally small:
 ```json
 {
   "status": "not_ready",
-  "reason": "one or more readiness components are not ready"
+  "reason": "one or more required readiness components are not ready"
 }
 ```
 
@@ -171,7 +171,10 @@ These routes present passive Opskit state only. Servekit does not run checks, di
 The component snapshot route may evaluate the component's `Status`,
 `Readiness`, and `Inspect` methods. Those methods are passive by contract and
 should return local or cached operational state. Inspection results and errors
-must be safe to serialize to the admin audience.
+have different boundaries: inspection data must be safe for the admin audience,
+while Opskit replaces a returned inspector error with generic
+`inspection_failure` detail. The original error remains private to direct
+`Registry.Inspect` callers.
 
 These routes are controlled by `WithOpsAdmin()`, not by `WithDefaultEndpointsEnabled(...)`.
 

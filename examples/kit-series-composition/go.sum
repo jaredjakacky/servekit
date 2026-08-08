@@ -13,8 +13,8 @@ github.com/jaredjakacky/configkit v0.3.0 h1:zJwExJLwrqU8+onTXP8Y8Agaz/XPZr648f1t
 github.com/jaredjakacky/configkit v0.3.0/go.mod h1:eiSfS2hdreFQHOM8rcL8bdJK2x0i1D8Nkt9MwnAcyQw=
 github.com/jaredjakacky/dependkit v0.3.0 h1:T+OD1B9f89BrIwvjZE6TTJFbGMf8/Iu0GtbYt6bEECU=
 github.com/jaredjakacky/dependkit v0.3.0/go.mod h1:5LgziRjyogWq02+Iezi8t604X/dBsmsTrdZLMt44ijM=
-github.com/jaredjakacky/opskit v0.2.0 h1:0zCugHYLrIMywKGI6NO7zu3HUcHQGzLy/OAa5mszVqc=
-github.com/jaredjakacky/opskit v0.2.0/go.mod h1:QAHpHTwWc0vUTCXu5pm+aRFybCyHMdZCbDkglMH1QNo=
+github.com/jaredjakacky/opskit v0.3.0 h1:HiqWIeAQLLCdI7TCle9tG3Scd6euOs0hFWTBWRvxgAc=
+github.com/jaredjakacky/opskit v0.3.0/go.mod h1:QAHpHTwWc0vUTCXu5pm+aRFybCyHMdZCbDkglMH1QNo=
 github.com/jaredjakacky/workerkit v0.5.0 h1:0iZrYrhNbjLZ+u+sPdk4XsRC4YnqVOCfhxwPiVoI9Gc=
 github.com/jaredjakacky/workerkit v0.5.0/go.mod h1:TEsbsAsUnvU3MZPU/hqJmLYx9ekTIfJqyVWfporePCo=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

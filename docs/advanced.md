@@ -288,8 +288,10 @@ Keep these boundaries explicit:
 - Worker runtimes or application control planes own active checks and commands.
 
 Admin routes are unauthenticated unless protected. Treat component identity,
-readiness reasons, status attributes, inspection details, and inspection errors
-as HTTP-visible data. Do not include secrets or unredacted user information.
+readiness reasons, status attributes, inspection details, and explicit public
+failure detail as HTTP-visible data. Opskit replaces arbitrary inspector errors
+with a generic `inspection_failure`; do not copy direct inspection errors into
+other responses or logs without an application-owned presentation policy.
 
 `WithOpsTimeout(...)` adds a deadline to the request context passed into Opskit;
 it is not a substitute for cancellation-aware component implementations.
