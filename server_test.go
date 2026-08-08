@@ -126,7 +126,7 @@ func TestServerHandlerReadyzOmitsOpskitComponentDetails(t *testing.T) {
 		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 	assertJSONField(t, rec, "status", "not_ready")
-	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more readiness components are not ready")
+	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more required readiness components are not ready")
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode /readyz body: %v", err)
@@ -137,6 +137,37 @@ func TestServerHandlerReadyzOmitsOpskitComponentDetails(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "payments") || strings.Contains(rec.Body.String(), "payments unavailable") {
 		t.Fatalf("/readyz body = %s, want no component identity or message", rec.Body.String())
 	}
+}
+
+func TestServerHandlerReadyzHonorsOptionalOpskitParentWithBlockingChild(t *testing.T) {
+	t.Parallel()
+
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opskit.ComponentFunc{
+		Info: opskit.ComponentInfo{Name: "config", Kind: "config"},
+		Fn: func(context.Context) opskit.Status {
+			return opskit.ReadyStatus("configuration loaded")
+		},
+	}, opskit.Required())
+	ops.MustRegister(opsReadinessComponent{
+		info:   opskit.ComponentInfo{Name: "clients", Kind: "client_registry"},
+		status: opskit.NotReadyStatus("client registry not ready"),
+		readiness: opskit.NotReadyReadiness("required client unavailable", opskit.ReadinessItem{
+			Name:   "payments",
+			Impact: opskit.ReadinessImpactBlocking,
+			Ready:  false,
+			State:  opskit.StateNotReady,
+		}),
+	}, opskit.Optional())
+
+	s := newBlackBoxServer(servekit.WithOps(ops))
+	s.SetReady(true)
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/readyz")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/readyz status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	assertJSONField(t, rec, "status", "ready")
 }
 
 func TestServerHandlerReadyzStillRequiresServekitLifecycleReadinessWithOpskit(t *testing.T) {
@@ -191,7 +222,7 @@ func TestServerHandlerReadyzSkipsReadinessChecksWhenOpskitIsNotReady(t *testing.
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more readiness components are not ready")
+	assertJSONBodyField(t, rec.Body.Bytes(), "reason", "one or more required readiness components are not ready")
 	if got := checkCalls.Load(); got != 0 {
 		t.Fatalf("readiness check called %d times, want 0", got)
 	}
@@ -356,6 +387,36 @@ func TestServerHandlerOpskitAdminRoutes(t *testing.T) {
 		t.Fatalf("/admin/components/config status = %d, want %d", snapshot.Code, http.StatusOK)
 	}
 	assertJSONNestedString(t, snapshot.Body.Bytes(), "config", "component", "name")
+	var snapshotBody struct {
+		Registration struct {
+			ReadinessPolicy string `json:"readiness_policy"`
+		} `json:"registration"`
+		Readiness struct {
+			Ready  bool   `json:"ready"`
+			Reason string `json:"reason"`
+			Items  []struct {
+				Name   string `json:"name"`
+				Impact string `json:"impact"`
+				Ready  bool   `json:"ready"`
+			} `json:"items"`
+		} `json:"readiness"`
+	}
+	if err := json.Unmarshal(snapshot.Body.Bytes(), &snapshotBody); err != nil {
+		t.Fatalf("decode /admin/components/config: %v", err)
+	}
+	if snapshotBody.Registration.ReadinessPolicy != "required" {
+		t.Fatalf("snapshot registration policy = %q, want required", snapshotBody.Registration.ReadinessPolicy)
+	}
+	if !snapshotBody.Readiness.Ready || snapshotBody.Readiness.Reason != "component ready" {
+		t.Fatalf("snapshot readiness = %+v, want ready component", snapshotBody.Readiness)
+	}
+	if len(snapshotBody.Readiness.Items) != 1 {
+		t.Fatalf("snapshot readiness item count = %d, want 1", len(snapshotBody.Readiness.Items))
+	}
+	item := snapshotBody.Readiness.Items[0]
+	if item.Name != "config" || item.Impact != "blocking" || !item.Ready {
+		t.Fatalf("snapshot readiness item = %+v, want ready blocking config item", item)
+	}
 
 	missing := performRequest(t, h, http.MethodGet, "/admin/components/missing")
 	if missing.Code != http.StatusNotFound {
@@ -475,6 +536,58 @@ func TestServerHandlerOpskitAdminSnapshotEncodingFailureReturnsInternalServerErr
 		t.Fatalf("/admin/components/broken status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 	assertJSONBodyField(t, rec.Body.Bytes(), "error", "response encoding failed")
+}
+
+func TestServerHandlerOpskitAdminSnapshotDoesNotExposeInspectorError(t *testing.T) {
+	t.Parallel()
+
+	const secret = "postgres://admin:secret@internal/config"
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opsInspectionComponent{
+		name: "broken",
+		err:  errors.New("inspect failed for " + secret),
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdmin()))
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components/broken")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/admin/components/broken status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("admin snapshot exposed inspector error: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"inspection_error"`) {
+		t.Fatalf("admin snapshot contains legacy inspection_error: %s", rec.Body.String())
+	}
+	assertJSONNestedString(t, rec.Body.Bytes(), "inspection_failed", "inspection_failure", "code")
+	assertJSONNestedString(t, rec.Body.Bytes(), "component inspection unavailable", "inspection_failure", "message")
+}
+
+func TestServerHandlerOpskitAdminSnapshotDoesNotExposeInspectorPanic(t *testing.T) {
+	t.Parallel()
+
+	const secret = "postgres://admin:secret@internal/config"
+	ops := opskit.NewRegistry()
+	ops.MustRegister(opsInspectionComponent{
+		name:       "broken",
+		panicValue: "inspect panicked for " + secret,
+	}, opskit.Required())
+
+	s := newBlackBoxServer(servekit.WithOps(ops, servekit.WithOpsAdmin()))
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/admin/components/broken")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/admin/components/broken status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("admin snapshot exposed inspector panic: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"inspection_error"`) {
+		t.Fatalf("admin snapshot contains legacy inspection_error: %s", rec.Body.String())
+	}
+	assertJSONNestedString(t, rec.Body.Bytes(), "inspection_failed", "inspection_failure", "code")
+	assertJSONNestedString(t, rec.Body.Bytes(), "component inspection unavailable", "inspection_failure", "message")
 }
 
 func TestServerHandlerOpskitPresentationNeverExecutesActiveCapabilities(t *testing.T) {
@@ -1072,6 +1185,26 @@ func assertJSONNestedString(t *testing.T, body []byte, want string, path ...any)
 type opsInspectionComponent struct {
 	name       string
 	inspection opskit.Inspection
+	err        error
+	panicValue any
+}
+
+type opsReadinessComponent struct {
+	info      opskit.ComponentInfo
+	status    opskit.Status
+	readiness opskit.Readiness
+}
+
+func (c opsReadinessComponent) ComponentInfo() opskit.ComponentInfo {
+	return c.info
+}
+
+func (c opsReadinessComponent) Status(context.Context) opskit.Status {
+	return c.status
+}
+
+func (c opsReadinessComponent) Readiness(context.Context) opskit.Readiness {
+	return c.readiness
 }
 
 func (c opsInspectionComponent) ComponentInfo() opskit.ComponentInfo {
@@ -1083,7 +1216,10 @@ func (c opsInspectionComponent) Status(context.Context) opskit.Status {
 }
 
 func (c opsInspectionComponent) Inspect(context.Context) (opskit.Inspection, error) {
-	return c.inspection, nil
+	if c.panicValue != nil {
+		panic(c.panicValue)
+	}
+	return c.inspection, c.err
 }
 
 type opsActiveCapabilityComponent struct {

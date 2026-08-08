@@ -133,7 +133,7 @@ func newRuntime(dependencies *dependkit.Registry) (*workerkit.Runtime, error) {
 		Name:        "dependencies",
 		Description: "Keeps cached dependency state fresh.",
 		Worker: workerkit.NewCheckGroupLoop(
-			dependkit.NewCheckGroup(dependencies),
+			dependencies,
 			workerkit.WithCheckInterval(30*time.Second),
 			workerkit.WithCheckTimeout(5*time.Second),
 		),
