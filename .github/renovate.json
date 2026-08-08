@@ -89,6 +89,13 @@
       "groupName": "github actions"
     },
     {
+      "description": "Let the custom Go support policy manage setup-go versions",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["uses-with"],
+      "matchDepNames": ["go"],
+      "enabled": false
+    },
+    {
       "matchManagers": ["gomod"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "go dependencies"
