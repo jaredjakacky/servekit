@@ -15,7 +15,7 @@ available Kit Series packages:
 From the Servekit repository root:
 
 ```bash
-go run ./examples/kit-series-composition
+go -C examples/kit-series-composition run .
 ```
 
 Then try:

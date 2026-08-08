@@ -186,7 +186,7 @@ This example is less about "how to build an app" and more about "why the raw Ser
 
 ## Running examples
 
-Run any example directly from the repository root with:
+Run ordinary examples directly from the repository root with:
 
 ```bash
 go run ./examples/<name>
@@ -194,15 +194,15 @@ go run ./examples/<name>
 # for example
 go run ./examples/basic
 go run ./examples/operations
-go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/streaming
 ```
 
-The Kit Series composition is the one exception because it is an isolated
-integration module:
+The telemetry and Kit Series composition examples use isolated modules to keep
+application-only dependencies out of Servekit's root module graph:
 
 ```bash
+go -C examples/telemetry run .
 go -C examples/kit-series-composition run .
 ```
 

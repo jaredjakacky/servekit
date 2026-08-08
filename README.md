@@ -58,10 +58,10 @@ import servekit "github.com/jaredjakacky/servekit"
 
 Servekit's root package depends on the OpenTelemetry API because HTTP tracing
 and metrics are part of its default server behavior and public configuration
-surface. The module also lists the OpenTelemetry SDK and stdout exporters for
-the repository's runnable telemetry example, plus sibling Kit Series modules
-used by composition examples. Those example-only packages are not compiled or
-linked into applications that import only Servekit.
+surface. Runnable examples that install the OpenTelemetry SDK and exporters or
+compose sibling Kit Series packages use nested Go modules, so those
+application-only dependencies stay out of Servekit's published root module
+graph.
 
 ## Quick Start
 

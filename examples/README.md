@@ -72,7 +72,7 @@ That is why the examples move from the vanilla path outward instead of being pre
 
 ## Run Them
 
-Run examples from the repository root:
+Run ordinary examples from the repository root:
 
 ```bash
 go run ./examples/<name>
@@ -80,11 +80,11 @@ go run ./examples/<name>
 # for example
 go run ./examples/basic
 go run ./examples/operations
-go run ./examples/telemetry
 go run ./examples/endpoint-controls
 go run ./examples/advanced-composition
 
-# The cross-kit integration example is an isolated Go module.
+# Dependency-heavy examples are isolated Go modules.
+go -C examples/telemetry run .
 go -C examples/kit-series-composition run .
 ```
 

@@ -168,12 +168,11 @@ public options. It does not construct SDK providers or exporters. Selecting,
 configuring, and shutting down those process-wide resources belongs to the host
 application.
 
-The repository keeps its runnable examples in the main Go module. As a result,
-`go.mod` also records OpenTelemetry SDK and stdout exporter dependencies used by
-`examples/telemetry`. Go compiles packages by import reachability, so those
-example-only dependencies are not compiled or linked into an application that
-imports only Servekit. Keeping them in one module lets CI build the examples
-against the same dependency versions as the package they demonstrate.
+The runnable `examples/telemetry` application uses a nested Go module so its
+OpenTelemetry SDK and stdout exporter dependencies stay out of Servekit's
+published root module graph. Its local `replace` directive builds against the
+checked-out Servekit source. Repository verification builds, vets, tests,
+tidy-checks, and scans the root and nested modules for vulnerabilities.
 
 ### Request metrics
 

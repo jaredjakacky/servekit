@@ -1,11 +1,13 @@
 SHELL := /bin/sh
 
 GO ?= go
+GO_MODULE ?= env GOWORK=off $(GO)
 GOFMT ?= gofmt
 PKGS ?= ./...
 GOFILES := $(filter-out $(shell git ls-files --deleted -- '*.go'),$(shell git ls-files -- '*.go'))
 GOVULNCHECK_VERSION ?= v1.6.0
 COMPOSITION_EXAMPLE_DIR := examples/kit-series-composition
+TELEMETRY_EXAMPLE_DIR := examples/telemetry
 
 # Keep build cache inside the repo so local runs are reproducible and do not
 # depend on a writable global cache path.
@@ -35,23 +37,24 @@ help: ## Show available targets.
 
 build-examples: ## Compile the runnable example programs.
 	@echo "==> build examples"
-	@$(GO) build ./examples/...
+	@$(GO_MODULE) build ./examples/...
 	@mkdir -p .bin
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) build -o $(CURDIR)/.bin/kit-series-composition .
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) build -o $(CURDIR)/.bin/kit-series-composition .
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) build -o $(CURDIR)/.bin/telemetry .
 
 dependency-boundary: ## Keep example-only dependencies out of the root package.
 	@echo "==> checking dependency boundary"
-	@imports="$$($(GO) list -deps -f '{{.ImportPath}}' .)"; \
+	@imports="$$($(GO_MODULE) list -deps -f '{{.ImportPath}}' .)"; \
 	forbidden="$$(printf '%s\n' "$$imports" | grep -E '^(github\.com/jaredjakacky/(configkit|dependkit|workerkit)|go\.opentelemetry\.io/otel/(exporters|sdk))(/|$$)' || true)"; \
 	if [ -n "$$forbidden" ]; then \
 		echo "The Servekit root package must not import example-only packages:"; \
 		echo "$$forbidden"; \
 		exit 1; \
 	fi
-	@modules="$$($(GO) list -m -f '{{.Path}}' all)"; \
-	forbidden="$$(printf '%s\n' "$$modules" | grep -E '^github\.com/jaredjakacky/(configkit|dependkit|workerkit)$$' || true)"; \
+	@modules="$$($(GO_MODULE) list -m -f '{{.Path}}' all)"; \
+	forbidden="$$(printf '%s\n' "$$modules" | grep -E '^(github\.com/jaredjakacky/(configkit|dependkit|workerkit)|go\.opentelemetry\.io/otel/(exporters|sdk))(/|$$)' || true)"; \
 	if [ -n "$$forbidden" ]; then \
-		echo "The Servekit module graph must not include sibling kits:"; \
+		echo "The Servekit root module graph must not include example-only modules:"; \
 		echo "$$forbidden"; \
 		exit 1; \
 	fi
@@ -71,37 +74,43 @@ fmt-check: ## Verify tracked Go source files are formatted.
 
 vet: ## Run go vet on all packages.
 	@echo "==> vet"
-	@$(GO) vet $(PKGS)
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) vet ./...
+	@$(GO_MODULE) vet $(PKGS)
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) vet ./...
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) vet ./...
 
 test: ## Run tests for all packages.
 	@echo "==> test"
-	@$(GO) test $(PKGS)
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) test ./...
+	@$(GO_MODULE) test $(PKGS)
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) test ./...
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) test ./...
 
 test-race: ## Run tests with the race detector enabled.
 	@echo "==> test (race)"
-	@$(GO) test -race $(PKGS)
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) test -race ./...
+	@$(GO_MODULE) test -race $(PKGS)
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) test -race ./...
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) test -race ./...
 
 coverage: ## Run tests with coverage output written to coverage.out.
 	@echo "==> coverage"
-	@$(GO) test -coverprofile=coverage.out $(PKGS)
+	@$(GO_MODULE) test -coverprofile=coverage.out $(PKGS)
 
 tidy: ## Synchronize go.mod and go.sum with the source tree.
 	@echo "==> tidy"
-	@$(GO) mod tidy
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) mod tidy
+	@$(GO_MODULE) mod tidy
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) mod tidy
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) mod tidy
 
 tidy-check: ## Verify go.mod/go.sum are already tidy.
 	@echo "==> checking tidy"
-	@$(GO) mod tidy -diff
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) mod tidy -diff
+	@$(GO_MODULE) mod tidy -diff
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) mod tidy -diff
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) mod tidy -diff
 
-govulncheck: ## Run the pinned govulncheck tool against the main module packages.
+govulncheck: ## Run the pinned govulncheck tool against all verified modules.
 	@echo "==> govulncheck"
-	@$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(PKGS)
-	@$(GO) -C $(COMPOSITION_EXAMPLE_DIR) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	@$(GO_MODULE) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(PKGS)
+	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 verify: fmt-check dependency-boundary vet test build-examples tidy-check ## Run the local verification suite.
 	@echo "==> verification passed"

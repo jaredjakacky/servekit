@@ -160,6 +160,18 @@ func TestServerOpenTelemetryAppliesSpanOptions(t *testing.T) {
 	if got := measurements[0].AttributeValue("servekit.span_test"); got != nil {
 		t.Fatalf("metric servekit.span_test attribute = %q, want omitted", got)
 	}
+	activeMeasurements := mp.int64Measurements("http.server.active_requests")
+	if len(activeMeasurements) != 2 {
+		t.Fatalf("active request measurements = %d, want 2", len(activeMeasurements))
+	}
+	for _, measurement := range activeMeasurements {
+		if got := measurement.AttributeValue("servekit.metric_test"); got != "yes" {
+			t.Errorf("active request servekit.metric_test attribute = %q, want %q", got, "yes")
+		}
+		if got := measurement.AttributeValue("servekit.span_test"); got != nil {
+			t.Errorf("active request servekit.span_test attribute = %q, want omitted", got)
+		}
+	}
 }
 
 func TestServerOpenTelemetryNormalizesUnknownRequestMethods(t *testing.T) {
@@ -526,8 +538,18 @@ func TestServerOpenTelemetryRunPathRecordsConnectionMetrics(t *testing.T) {
 func TestServerOpenTelemetryRecordsAuthRejectionMetric(t *testing.T) {
 	t.Parallel()
 
+	tp := newRecordingTracerProvider()
 	mp := newRecordingMeterProvider()
-	s := newOTelTestServer(servekit.WithMeterProvider(mp))
+	s := newOTelTestServer(
+		servekit.WithTracerProvider(tp),
+		servekit.WithMeterProvider(mp),
+		servekit.WithOTelSpanAttributes(func(*http.Request) []attribute.KeyValue {
+			return []attribute.KeyValue{attribute.String("servekit.span_test", "yes")}
+		}),
+		servekit.WithOTelMetricAttributes(func(*http.Request) []attribute.KeyValue {
+			return []attribute.KeyValue{attribute.String("servekit.metric_test", "yes")}
+		}),
+	)
 	s.Handle(http.MethodGet, "/secure", func(r *http.Request) (any, error) {
 		t.Fatal("handler called for unauthorized request")
 		return nil, nil
@@ -538,16 +560,32 @@ func TestServerOpenTelemetryRecordsAuthRejectionMetric(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 
+	measurements := mp.int64Measurements("servekit.http.server.request.auth_rejection.count")
 	assertInt64Measurement(
 		t,
-		mp.int64Measurements("servekit.http.server.request.auth_rejection.count"),
+		measurements,
 		1,
 		map[string]any{
 			string(semconv.HTTPRequestMethodKey):      http.MethodGet,
 			string(semconv.HTTPRouteKey):              "/secure",
 			string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusUnauthorized),
+			"servekit.metric_test":                    "yes",
 		},
 	)
+	if got := measurements[0].AttributeValue("servekit.span_test"); got != nil {
+		t.Fatalf("auth rejection metric servekit.span_test attribute = %q, want omitted", got)
+	}
+
+	spans := tp.Spans()
+	if len(spans) != 1 {
+		t.Fatalf("recorded spans = %d, want 1", len(spans))
+	}
+	if got := spans[0].AttributeValue("servekit.span_test"); got != "yes" {
+		t.Fatalf("span servekit.span_test attribute = %q, want %q", got, "yes")
+	}
+	if got := spans[0].AttributeValue("servekit.metric_test"); got != nil {
+		t.Fatalf("span servekit.metric_test attribute = %q, want omitted", got)
+	}
 }
 
 func TestServerOpenTelemetryRecordsTimeoutMetric(t *testing.T) {
