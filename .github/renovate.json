@@ -6,9 +6,17 @@
   "rangeStrategy": "replace",
   "prConcurrentLimit": 4,
 
-  // This integration example intentionally snapshots sibling kit releases.
-  // Updating them automatically would recreate a cross-repository release loop.
-  "ignorePaths": ["examples/kit-series-composition/**"],
+  // config:recommended ignores examples by default, but these two example
+  // modules are part of make verify and must remain dependency-consistent.
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/__fixtures__/**"
+  ],
 
   // go.dev/dl stable releases are treated as newest-first:
   // [0] = current stable line, [1] = previous stable line
@@ -78,6 +86,20 @@
   ],
 
   "packageRules": [
+    // This integration example intentionally snapshots sibling kit releases.
+    // Keep those versions fixed without hiding Opskit, which must stay aligned
+    // with Servekit's direct requirement for the example module to remain tidy.
+    {
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["examples/kit-series-composition/go.mod"],
+      "matchDepNames": [
+        "github.com/jaredjakacky/configkit",
+        "github.com/jaredjakacky/dependkit",
+        "github.com/jaredjakacky/servekit",
+        "github.com/jaredjakacky/workerkit"
+      ],
+      "enabled": false
+    },
     {
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["go-floor", "go-latest"],
@@ -94,6 +116,18 @@
       "matchDepTypes": ["uses-with"],
       "matchDepNames": ["go"],
       "enabled": false
+    },
+    {
+      "matchManagers": ["gomod"],
+      "postUpdateOptions": ["gomodTidy"]
+    },
+    {
+      "description": "Keep telemetry's transitive Opskit requirement aligned with Servekit",
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["examples/telemetry/go.mod"],
+      "matchDepNames": ["github.com/jaredjakacky/opskit"],
+      "matchDepTypes": ["indirect"],
+      "enabled": true
     },
     {
       "matchManagers": ["gomod"],
