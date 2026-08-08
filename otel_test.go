@@ -202,6 +202,22 @@ func TestServerOpenTelemetryNormalizesUnknownRequestMethods(t *testing.T) {
 	if got := measurements[0].AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != nil {
 		t.Fatalf("metric http.request.method_original = %q, want omitted", got)
 	}
+
+	activeMeasurements := mp.int64Measurements("http.server.active_requests")
+	if len(activeMeasurements) != 2 {
+		t.Fatalf("active request measurements = %d, want 2", len(activeMeasurements))
+	}
+	for _, measurement := range activeMeasurements {
+		if got := measurement.AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "_OTHER" {
+			t.Errorf("active request http.request.method = %q, want %q", got, "_OTHER")
+		}
+		if got := measurement.AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != nil {
+			t.Errorf("active request http.request.method_original = %q, want omitted", got)
+		}
+		if got := measurement.AttributeValue(string(semconv.URLSchemeKey)); got != "http" {
+			t.Errorf("active request url.scheme = %q, want %q", got, "http")
+		}
+	}
 }
 
 func TestServerOpenTelemetryHonorsConfiguredKnownRequestMethods(t *testing.T) {
@@ -216,10 +232,18 @@ func TestServerOpenTelemetryHonorsConfiguredKnownRequestMethods(t *testing.T) {
 	s.HandleHTTP("BREW", "/widgets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	s.HandleHTTP(http.MethodGet, "/standard", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
 
 	performRequest(t, s.Handler(), "BREW", "/widgets")
+	performRequest(t, s.Handler(), http.MethodGet, "/standard")
 
-	span := tp.Spans()[0]
+	spans := tp.Spans()
+	if len(spans) != 2 {
+		t.Fatalf("recorded spans = %d, want 2", len(spans))
+	}
+	span := spans[0]
 	if got := span.Name(); got != "BREW /widgets" {
 		t.Fatalf("span name = %q, want %q", got, "BREW /widgets")
 	}
@@ -229,9 +253,23 @@ func TestServerOpenTelemetryHonorsConfiguredKnownRequestMethods(t *testing.T) {
 	if got := span.AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != nil {
 		t.Fatalf("span http.request.method_original = %q, want omitted", got)
 	}
-	measurement := mp.float64Measurements("http.server.request.duration")[0]
+	if got := spans[1].AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "_OTHER" {
+		t.Fatalf("replacement-list GET span http.request.method = %q, want %q", got, "_OTHER")
+	}
+	if got := spans[1].AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != http.MethodGet {
+		t.Fatalf("replacement-list GET span http.request.method_original = %q, want %q", got, http.MethodGet)
+	}
+
+	measurements := mp.float64Measurements("http.server.request.duration")
+	if len(measurements) != 2 {
+		t.Fatalf("duration measurements = %d, want 2", len(measurements))
+	}
+	measurement := measurements[0]
 	if got := measurement.AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "BREW" {
 		t.Fatalf("metric http.request.method = %q, want %q", got, "BREW")
+	}
+	if got := measurements[1].AttributeValue(string(semconv.HTTPRequestMethodKey)); got != "_OTHER" {
+		t.Fatalf("replacement-list GET metric http.request.method = %q, want %q", got, "_OTHER")
 	}
 }
 
@@ -257,6 +295,7 @@ func TestServerOpenTelemetryDerivesSchemeFromTransport(t *testing.T) {
 			name: "plain HTTP ignores forwarded and URL schemes",
 			configure: func(r *http.Request) {
 				r.URL.Scheme = "attacker-controlled"
+				r.Header.Set("Forwarded", "for=192.0.2.1;proto=gopher")
 				r.Header.Set("X-Forwarded-Proto", "also-attacker-controlled")
 			},
 			wantScheme: "http",
@@ -265,6 +304,7 @@ func TestServerOpenTelemetryDerivesSchemeFromTransport(t *testing.T) {
 			name: "TLS ignores forwarded scheme",
 			configure: func(r *http.Request) {
 				r.TLS = &tls.ConnectionState{}
+				r.Header.Set("Forwarded", "for=192.0.2.1;proto=http")
 				r.Header.Set("X-Forwarded-Proto", "ftp")
 			},
 			wantScheme: "https",
@@ -281,8 +321,12 @@ func TestServerOpenTelemetryDerivesSchemeFromTransport(t *testing.T) {
 
 	spans := tp.Spans()
 	measurements := mp.float64Measurements("http.server.request.duration")
-	if len(spans) != len(tests) || len(measurements) != len(tests) {
-		t.Fatalf("spans/durations = %d/%d, want %d/%d", len(spans), len(measurements), len(tests), len(tests))
+	activeMeasurements := mp.int64Measurements("http.server.active_requests")
+	if len(spans) != len(tests) || len(measurements) != len(tests) || len(activeMeasurements) != 2*len(tests) {
+		t.Fatalf(
+			"spans/durations/active requests = %d/%d/%d, want %d/%d/%d",
+			len(spans), len(measurements), len(activeMeasurements), len(tests), len(tests), 2*len(tests),
+		)
 	}
 	for i, tc := range tests {
 		if got := spans[i].AttributeValue(string(semconv.URLSchemeKey)); got != tc.wantScheme {
@@ -291,6 +335,42 @@ func TestServerOpenTelemetryDerivesSchemeFromTransport(t *testing.T) {
 		if got := measurements[i].AttributeValue(string(semconv.URLSchemeKey)); got != tc.wantScheme {
 			t.Errorf("%s: metric url.scheme = %q, want %q", tc.name, got, tc.wantScheme)
 		}
+		for _, measurement := range activeMeasurements[2*i : 2*i+2] {
+			if got := measurement.AttributeValue(string(semconv.URLSchemeKey)); got != tc.wantScheme {
+				t.Errorf("%s: active request url.scheme = %q, want %q", tc.name, got, tc.wantScheme)
+			}
+		}
+	}
+}
+
+func TestServerOpenTelemetryBoundsOutcomeMetricMethodAndScheme(t *testing.T) {
+	t.Parallel()
+
+	mp := newRecordingMeterProvider()
+	s := newOTelTestServer(servekit.WithMeterProvider(mp))
+	s.HandleHTTP("BREW", "/secure", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler called for unauthorized request")
+	}), servekit.WithAuthCheck(func(*http.Request) bool { return false }))
+
+	req := httptest.NewRequest("BREW", "/secure", nil)
+	req.URL.Scheme = "attacker-controlled"
+	req.Header.Set("Forwarded", "for=192.0.2.1;proto=gopher")
+	req.Header.Set("X-Forwarded-Proto", "also-attacker-controlled")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	measurements := mp.int64Measurements("servekit.http.server.request.auth_rejection.count")
+	assertInt64Measurement(t, measurements, 1, map[string]any{
+		string(semconv.HTTPRequestMethodKey):      "_OTHER",
+		string(semconv.URLSchemeKey):              "http",
+		string(semconv.HTTPRouteKey):              "/secure",
+		string(semconv.HTTPResponseStatusCodeKey): int64(http.StatusUnauthorized),
+	})
+	if got := measurements[0].AttributeValue(string(semconv.HTTPRequestMethodOriginalKey)); got != nil {
+		t.Fatalf("outcome metric http.request.method_original = %q, want omitted", got)
 	}
 }
 
