@@ -8,6 +8,7 @@ GOFILES := $(filter-out $(shell git ls-files --deleted -- '*.go'),$(shell git ls
 GOVULNCHECK_VERSION ?= v1.6.0
 COMPOSITION_EXAMPLE_DIR := examples/kit-series-composition
 TELEMETRY_EXAMPLE_DIR := examples/telemetry
+RELEASE_CHECK_DIR := tools/releasecheck
 
 # Keep build cache inside the repo so local runs are reproducible and do not
 # depend on a writable global cache path.
@@ -77,18 +78,21 @@ vet: ## Run go vet on all packages.
 	@$(GO_MODULE) vet $(PKGS)
 	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) vet ./...
 	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) vet ./...
+	@$(GO_MODULE) -C $(RELEASE_CHECK_DIR) vet ./...
 
 test: ## Run tests for all packages.
 	@echo "==> test"
 	@$(GO_MODULE) test $(PKGS)
 	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) test ./...
 	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) test ./...
+	@$(GO_MODULE) -C $(RELEASE_CHECK_DIR) test ./...
 
 test-race: ## Run tests with the race detector enabled.
 	@echo "==> test (race)"
 	@$(GO_MODULE) test -race $(PKGS)
 	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) test -race ./...
 	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) test -race ./...
+	@$(GO_MODULE) -C $(RELEASE_CHECK_DIR) test -race ./...
 
 coverage: ## Run tests with coverage output written to coverage.out.
 	@echo "==> coverage"
@@ -99,18 +103,21 @@ tidy: ## Synchronize go.mod and go.sum with the source tree.
 	@$(GO_MODULE) mod tidy
 	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) mod tidy
 	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) mod tidy
+	@$(GO_MODULE) -C $(RELEASE_CHECK_DIR) mod tidy
 
 tidy-check: ## Verify go.mod/go.sum are already tidy.
 	@echo "==> checking tidy"
 	@$(GO_MODULE) mod tidy -diff
 	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) mod tidy -diff
 	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) mod tidy -diff
+	@$(GO_MODULE) -C $(RELEASE_CHECK_DIR) mod tidy -diff
 
 govulncheck: ## Run the pinned govulncheck tool against all verified modules.
 	@echo "==> govulncheck"
 	@$(GO_MODULE) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(PKGS)
 	@$(GO_MODULE) -C $(COMPOSITION_EXAMPLE_DIR) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 	@$(GO_MODULE) -C $(TELEMETRY_EXAMPLE_DIR) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	@$(GO_MODULE) -C $(RELEASE_CHECK_DIR) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 verify: fmt-check dependency-boundary vet test build-examples tidy-check ## Run the local verification suite.
 	@echo "==> verification passed"
