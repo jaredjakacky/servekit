@@ -39,7 +39,7 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.github\\/workflows\\/ci\\.ya?ml$/"],
+      "managerFilePatterns": ["/^\\.github\\/workflows\\/.*\\.ya?ml$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+- ['\"]?(?<currentValue>\\d+\\.\\d+)\\.x['\"]?"
       ]

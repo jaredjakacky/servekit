@@ -31,6 +31,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          # renovate: datasource=custom.go-supported-floor depName=go-floor versioning=semver-coerced
+          go-version: '1.25.x'
+          check-latest: true
       - name: Validate version and source
         shell: bash
         run: |
@@ -41,17 +47,12 @@ jobs:
             exit 1
           fi
 
-          prerelease_identifier='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
-          semver_pattern="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-$prerelease_identifier(\\.$prerelease_identifier)*)?$"
-          if [[ "$VERSION" =~ $semver_pattern ]]; then
-            major="${BASH_REMATCH[1]}"
-          else
-            echo "Version must be canonical semver, such as v0.4.0 or v1.0.0-rc.1."
-            exit 1
-          fi
+          module_path="$(GOWORK=off go list -m -f '{{.Path}}')"
+          GOWORK=off go -C tools/releasecheck run . "$module_path" "$VERSION"
 
-          if (( major > 1 )); then
-            echo "The current module path supports only v0 and v1 releases."
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "Release commit $GITHUB_SHA is not reachable from $DEFAULT_BRANCH."
             exit 1
           fi
 
@@ -155,6 +156,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ inputs.version }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out validated commit
@@ -166,6 +168,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "Release commit $GITHUB_SHA is no longer reachable from $DEFAULT_BRANCH."
+            exit 1
+          fi
 
           git fetch --force --tags origin
           if git show-ref --verify --quiet "refs/tags/$VERSION"; then
