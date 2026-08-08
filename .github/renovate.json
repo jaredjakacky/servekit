@@ -32,7 +32,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["/^go\\.mod$/"],
+      "managerFilePatterns": ["/(^|/)go\\.mod$/"],
       "matchStrings": [
         "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+go (?<currentValue>\\d+\\.\\d+(?:\\.\\d+)?)"
       ]
@@ -91,6 +91,14 @@
       "matchManagers": ["gomod"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "go dependencies"
+    },
+    // The telemetry example always verifies the local checkout through its
+    // replace directive; only its real application dependencies need updates.
+    {
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["examples/telemetry/go.mod"],
+      "matchDepNames": ["github.com/jaredjakacky/servekit"],
+      "enabled": false
     }
   ]
 }
