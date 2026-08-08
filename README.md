@@ -280,7 +280,19 @@ make govulncheck
 
 `make verify` checks formatting, runs `go vet`, runs tests, builds the runnable examples, and verifies that `go.mod` and `go.sum` are tidy. `make build-examples` is available when you only want to compile the runnable examples.
 
-CI runs verification and race tests on the supported Go versions. Release tags are gated by those jobs plus `govulncheck` before publishing.
+CI runs verification and race tests on the supported Go versions.
+
+## Releasing
+
+Releases start from the repository's **Actions → Release → Run workflow**
+screen. Select `main` and enter the new semantic version, such as `v0.5.0`.
+The workflow validates that version and runs `make verify`, `make test-race`,
+and `make govulncheck` against the exact selected commit on every supported Go
+version. Only after all checks pass does it create the version tag and GitHub
+Release.
+
+Do not create or push `v*` tags manually; doing so would publish a Go module
+version without the release workflow's pre-publication checks.
 
 ## Issues and Scope
 
