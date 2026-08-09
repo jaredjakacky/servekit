@@ -28,6 +28,25 @@ func TestHandleRegistersHandlerFuncRoute(t *testing.T) {
 	assertHandlerJSONPathString(t, rec.Body.Bytes(), "data.message", "hi")
 }
 
+func TestHandleUsesPointerHTTPError(t *testing.T) {
+	t.Parallel()
+
+	s := newHandlerTestServer()
+	s.Handle(http.MethodGet, "/forbidden", func(r *http.Request) (any, error) {
+		return nil, &servekit.HTTPError{
+			StatusCode: http.StatusForbidden,
+			Message:    "forbidden",
+		}
+	})
+
+	rec := performRequest(t, s.Handler(), http.MethodGet, "/forbidden")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	assertHandlerJSONPathString(t, rec.Body.Bytes(), "error", "forbidden")
+}
+
 func TestHandleRoutesResponseEncodingFailureThroughErrorEncoder(t *testing.T) {
 	t.Parallel()
 
@@ -211,7 +230,10 @@ func TestWithAuthGateUsesReturnedError(t *testing.T) {
 		called = true
 		return "ok", nil
 	}, servekit.WithAuthGate(func(r *http.Request) error {
-		return servekit.Error(http.StatusForbidden, "forbidden", nil)
+		return &servekit.HTTPError{
+			StatusCode: http.StatusForbidden,
+			Message:    "forbidden",
+		}
 	}))
 
 	rec := performRequest(t, s.Handler(), http.MethodGet, "/gate")

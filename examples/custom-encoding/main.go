@@ -46,10 +46,13 @@ func main() {
 			status := http.StatusInternalServerError
 			message := "internal server error"
 
-			var httpErr servekit.HTTPError
+			httpErr, foundHTTPError := findServekitHTTPError(err)
 			switch {
-			case errors.As(err, &httpErr):
-				if httpErr.StatusCode > 0 {
+			case foundHTTPError:
+				if httpErr == nil {
+					break
+				}
+				if httpErr.StatusCode >= 200 && httpErr.StatusCode <= 599 {
 					status = httpErr.StatusCode
 				}
 				if httpErr.Message != "" {
@@ -114,4 +117,27 @@ func main() {
 	if err := s.Run(ctx); err != nil {
 		log.Printf("serve: %v", err)
 	}
+}
+
+func findServekitHTTPError(err error) (*servekit.HTTPError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	switch httpErr := err.(type) {
+	case servekit.HTTPError:
+		return &httpErr, true
+	case *servekit.HTTPError:
+		return httpErr, true
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() error }:
+		return findServekitHTTPError(wrapped.Unwrap())
+	case interface{ Unwrap() []error }:
+		for _, child := range wrapped.Unwrap() {
+			if httpErr, ok := findServekitHTTPError(child); ok {
+				return httpErr, true
+			}
+		}
+	}
+	return nil, false
 }
