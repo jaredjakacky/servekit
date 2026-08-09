@@ -50,7 +50,7 @@ Default behavior:
 - non-`nil` payload -> `200 OK` with JSON shaped like `{"data": ...}`
 - returned error -> delegated to the configured `ErrorEncoder`
 
-If the handler needs explicit HTTP status control, return `servekit.Error(...)` or an `HTTPError`.
+If the handler needs explicit HTTP status control, return `servekit.Error(...)` or an `HTTPError` value or pointer. The default error encoder recognizes either form through wrapped error chains. Final status codes from `200` through `599` are used directly; zero or a negative value leaves status selection to the default mapping, and other values fail closed to HTTP `500`.
 
 The default JSON encoder serializes the complete success body before committing `200 OK`. If serialization fails, Servekit can still return the configured error response. Use `HandleHTTP` when an endpoint needs streaming or other direct response semantics.
 

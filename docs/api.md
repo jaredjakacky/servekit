@@ -60,7 +60,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `JSONError()`
 
-  Default error encoder. It understands `HTTPError`, timeouts, cancellations, and request-body-limit failures and renders a JSON error response.
+  Default error encoder. It understands wrapped `HTTPError` values and pointers, timeouts, cancellations, and request-body-limit failures and renders a JSON error response. Explicit final status codes from `200` through `599` are accepted; invalid positive codes fail closed to `500`.
 
 ### Raw route path
 
@@ -100,11 +100,11 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `HTTPError`
 
-  Error value for handlers that need explicit HTTP status control instead of the default error mapping.
+  Error type for handlers that need explicit HTTP status control instead of the default error mapping. Servekit recognizes both values and pointers, including through wrapped error chains.
 
 - `HTTPError.StatusCode`
 
-  The HTTP status Servekit should return for the error.
+  The final HTTP status Servekit should return for the error. Values from `200` through `599` are used directly. Zero and negative values leave status selection to the default error mapping; other values fail closed to `500`.
 
 - `HTTPError.Message`
 
@@ -274,7 +274,7 @@ Everything else in this file exists to customize that path without abandoning `n
 
 - `WithOpsAdminAuthGate(fn func(*http.Request) error)`
 
-  Configures an endpoint-style auth gate for Opskit admin routes when they are enabled with `WithOpsAdmin()`. A nil gate is ignored.
+  Configures an endpoint-style auth gate for Opskit admin routes when they are enabled with `WithOpsAdmin()`. The gate may return an `HTTPError` value or pointer to control the denial response. A nil gate is ignored.
 
 - `WithOpsTimeout(timeout time.Duration)`
 
@@ -378,7 +378,7 @@ Servekit's default path already includes request-level tracing and metrics. On t
 
 - `WithAuthGate(fn func(*http.Request) error)`
 
-  Adds an error-returning auth gate for richer or more specific auth failure behavior.
+  Adds an error-returning auth gate for richer or more specific auth failure behavior. The gate may return an `HTTPError` value or pointer to control the response status and message.
 
 - `WithEndpointResponseEncoder(encoder ResponseEncoder)`
 

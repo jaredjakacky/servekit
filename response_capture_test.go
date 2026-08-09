@@ -3,6 +3,7 @@ package servekit_test
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -234,6 +235,87 @@ func TestServerAbortsCommittedPanicResponse(t *testing.T) {
 	}
 	if serverLogs.Len() != 0 {
 		t.Fatalf("net/http server logs = %q, want none for ErrAbortHandler", serverLogs.String())
+	}
+}
+
+func TestServerRecoveryReplacesStaleContentLengthBeforeCommit(t *testing.T) {
+	t.Parallel()
+
+	const (
+		origin        = "https://client.example"
+		requestID     = "request-123"
+		correlationID = "correlation-123"
+	)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := servekit.New(
+		servekit.WithLogger(logger),
+		servekit.WithDefaultEndpointsEnabled(false),
+		servekit.WithOpenTelemetryEnabled(false),
+		servekit.WithAccessLogEnabled(false),
+		servekit.WithCORSConfig(servekit.CORSConfig{AllowedOrigins: []string{origin}}),
+	)
+	s.HandleHTTP(http.MethodGet, "/panic", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Preserved", "yes")
+		panic("boom")
+	}))
+
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/panic", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	req.Header.Set("Origin", origin)
+	req.Header.Set("X-Request-ID", requestID)
+	req.Header.Set("X-Correlation-ID", correlationID)
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET uncommitted panic route: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read recovery response: %v", err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
+	}
+	if got := resp.Header.Get("Content-Length"); got == "1000" {
+		t.Fatalf("Content-Length = %q, want stale value removed", got)
+	}
+	if resp.ContentLength >= 0 && resp.ContentLength != int64(len(body)) {
+		t.Fatalf("response ContentLength = %d, body length = %d", resp.ContentLength, len(body))
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want %q", got, "application/json")
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != origin {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, origin)
+	}
+	if got := resp.Header.Get("X-Request-ID"); got != requestID {
+		t.Fatalf("X-Request-ID = %q, want %q", got, requestID)
+	}
+	if got := resp.Header.Get("X-Correlation-ID"); got != correlationID {
+		t.Fatalf("X-Correlation-ID = %q, want %q", got, correlationID)
+	}
+	if got := resp.Header.Get("X-Preserved"); got != "yes" {
+		t.Fatalf("X-Preserved = %q, want %q", got, "yes")
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got, _ := payload["error"].(string); got != "internal server error" {
+		t.Fatalf("error = %q, want %q", got, "internal server error")
+	}
+	if got, _ := payload["request_id"].(string); got != requestID {
+		t.Fatalf("request_id = %q, want %q", got, requestID)
 	}
 }
 

@@ -163,10 +163,14 @@ type ReadinessCheck func(context.Context) error
 
 // HTTPError carries an HTTP status code alongside an underlying error.
 //
-// Use HTTPError (or Error) when handlers need explicit control over status
-// mapping instead of relying on the default 500/504 behavior.
+// Both HTTPError values and pointers are recognized through wrapped error
+// chains. Use HTTPError (or Error) when handlers need explicit control over
+// status mapping instead of relying on the default 500/504 behavior.
+// StatusCode values from 200 through 599 are used as final response statuses.
+// A zero or negative value leaves status selection to the default mapping;
+// other values fail closed to HTTP 500.
 type HTTPError struct {
-	StatusCode int    // StatusCode is the HTTP status returned for this error.
+	StatusCode int    // StatusCode is the final HTTP status requested for this error.
 	Message    string // Message is the client-facing error text.
 	Err        error  // Err is the wrapped underlying cause, when present.
 }
@@ -189,10 +193,62 @@ func Error(status int, message string, err error) error {
 	return HTTPError{StatusCode: status, Message: message, Err: err}
 }
 
+// asHTTPError returns the first HTTPError in err's tree, preserving the same
+// depth-first order as errors.As while accepting both value and pointer forms.
+// A nil result with ok set reports a typed-nil *HTTPError.
+func asHTTPError(err error) (*HTTPError, bool) {
+	if err == nil {
+		return nil, false
+	}
+
+	switch httpErr := err.(type) {
+	case HTTPError:
+		return &httpErr, true
+	case *HTTPError:
+		return httpErr, true
+	}
+
+	// Preserve the custom conversion behavior supported by errors.As before
+	// descending into ordinary wrapped errors.
+	if matcher, ok := err.(interface{ As(any) bool }); ok {
+		var value HTTPError
+		if matcher.As(&value) {
+			return &value, true
+		}
+		var pointer *HTTPError
+		if matcher.As(&pointer) {
+			return pointer, true
+		}
+	}
+
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() error }:
+		return asHTTPError(wrapped.Unwrap())
+	case interface{ Unwrap() []error }:
+		for _, child := range wrapped.Unwrap() {
+			if httpErr, ok := asHTTPError(child); ok {
+				return httpErr, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func validHTTPErrorStatus(status int) bool {
+	return status >= 200 && status <= 599
+}
+
 func statusFromError(err error) int {
-	var httpErr HTTPError
-	if errors.As(err, &httpErr) && httpErr.StatusCode > 0 {
-		return httpErr.StatusCode
+	if httpErr, ok := asHTTPError(err); ok {
+		if httpErr == nil {
+			return http.StatusInternalServerError
+		}
+		if httpErr.StatusCode > 0 {
+			if validHTTPErrorStatus(httpErr.StatusCode) {
+				return httpErr.StatusCode
+			}
+			return http.StatusInternalServerError
+		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return http.StatusGatewayTimeout
@@ -264,8 +320,8 @@ func WithAuthCheck(check func(*http.Request) bool) EndpointOption {
 //
 // When fn returns a non-nil error, Handle and HandleHTTP pass that error
 // directly to the current ErrorEncoder and do not invoke endpoint middleware or
-// the handler. Return HTTPError values or Error(...) when you need explicit
-// control over the response status and message.
+// the handler. Return an HTTPError value or pointer, or use Error(...), when you
+// need explicit control over the response status and message.
 func WithAuthGate(fn func(*http.Request) error) EndpointOption {
 	return func(cfg *endpointConfig) { cfg.requireAuthGate = fn }
 }

@@ -51,10 +51,10 @@ func JSONResponse() ResponseEncoder {
 
 // JSONError returns the default error encoder for Handle.
 //
-// JSONError maps HTTPError values to their StatusCode, maps context cancellation
-// and deadline errors to HTTP 504, and otherwise returns HTTP 500. The payload
-// shape is {"error": "..."} and includes request_id when one is present in the
-// request context.
+// JSONError maps HTTPError values and pointers to their usable final StatusCode,
+// maps context cancellation and deadline errors to HTTP 504, and otherwise
+// returns HTTP 500. The payload shape is {"error": "..."} and includes
+// request_id when one is present in the request context.
 func JSONError() ErrorEncoder {
 	return func(w http.ResponseWriter, r *http.Request, err error) error {
 		status := statusFromError(err)
@@ -63,9 +63,16 @@ func JSONError() ErrorEncoder {
 }
 
 func clientErrorMessage(err error, status int) string {
-	var httpErr HTTPError
-	if errors.As(err, &httpErr) && httpErr.Message != "" {
-		return httpErr.Message
+	if httpErr, ok := asHTTPError(err); ok {
+		if httpErr == nil {
+			return defaultClientErrorMessage(status)
+		}
+		if httpErr.Message != "" {
+			return httpErr.Message
+		}
+		if httpErr.StatusCode > 0 && !validHTTPErrorStatus(httpErr.StatusCode) {
+			return defaultClientErrorMessage(status)
+		}
 	}
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
@@ -77,6 +84,10 @@ func clientErrorMessage(err error, status int) string {
 	case errors.Is(err, context.Canceled):
 		return "request canceled"
 	}
+	return defaultClientErrorMessage(status)
+}
+
+func defaultClientErrorMessage(status int) string {
 	if text := http.StatusText(status); text != "" {
 		return strings.ToLower(text)
 	}
@@ -88,7 +99,9 @@ func writeDefaultJSONError(w http.ResponseWriter, status int, message, requestID
 	if requestID != "" {
 		body["request_id"] = requestID
 	}
-	w.Header().Set("Content-Type", "application/json")
+	h := w.Header()
+	h.Del("Content-Length")
+	h.Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	return json.NewEncoder(w).Encode(body)
 }

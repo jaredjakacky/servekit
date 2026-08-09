@@ -442,7 +442,10 @@ func TestServerHandlerOpskitAdminRoutesCanUseAuthGate(t *testing.T) {
 			if r.Header.Get("X-Admin-Token") == "local-dev" {
 				return nil
 			}
-			return servekit.Error(http.StatusForbidden, "admin token required", nil)
+			return &servekit.HTTPError{
+				StatusCode: http.StatusForbidden,
+				Message:    "admin token required",
+			}
 		}),
 	))
 	h := s.Handler()
