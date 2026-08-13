@@ -1091,6 +1091,126 @@ func TestServerRunAppliesDrainDelayBeforeShutdown(t *testing.T) {
 	}
 }
 
+func TestServerRunWithShutdownContextBoundsDrainDelay(t *testing.T) {
+	addr := reserveLoopbackAddr(t)
+	s := newBlackBoxServer(
+		servekit.WithAddr(addr),
+		servekit.WithShutdownDrainDelay(2*time.Second),
+		servekit.WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var factoryCalls atomic.Int32
+	var factoryObservedNotReady atomic.Bool
+	var cancelShutdown context.CancelFunc
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.RunWithShutdownContext(ctx, func() context.Context {
+			factoryCalls.Add(1)
+			factoryObservedNotReady.Store(!s.Ready())
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			cancelShutdown = shutdownCancel
+			return shutdownCtx
+		})
+	}()
+
+	waitForHTTPStatus(t, "http://"+addr+"/readyz", http.StatusOK, 2*time.Second)
+	startedAt := time.Now()
+	cancel()
+
+	err := waitForRunResult(t, errCh, 2*time.Second)
+	if cancelShutdown != nil {
+		cancelShutdown()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunWithShutdownContext() error = %v, want context deadline exceeded", err)
+	}
+	if got := factoryCalls.Load(); got != 1 {
+		t.Fatalf("shutdown context factory calls = %d, want 1", got)
+	}
+	if !factoryObservedNotReady.Load() {
+		t.Fatal("shutdown context factory observed Ready() = true, want false")
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("RunWithShutdownContext() returned after %v, want outer context to bound drain delay", elapsed)
+	}
+}
+
+func TestServerRunWithShutdownContextBoundsHTTPShutdown(t *testing.T) {
+	addr := reserveLoopbackAddr(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	s := newBlackBoxServer(
+		servekit.WithAddr(addr),
+		servekit.WithShutdownTimeout(2*time.Second),
+	)
+	s.HandleHTTP(http.MethodGet, "/stuck-coordinated", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		_, _ = io.WriteString(w, "too late")
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var cancelShutdown context.CancelFunc
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.RunWithShutdownContext(ctx, func() context.Context {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			cancelShutdown = shutdownCancel
+			return shutdownCtx
+		})
+	}()
+
+	waitForHTTPStatus(t, "http://"+addr+"/readyz", http.StatusOK, 2*time.Second)
+	requestErrCh := make(chan error, 1)
+	go func() {
+		resp, err := (&http.Client{Timeout: 3 * time.Second}).Get("http://" + addr + "/stuck-coordinated")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		requestErrCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stuck coordinated request did not reach handler")
+	}
+	startedAt := time.Now()
+	cancel()
+
+	runErr := waitForRunResult(t, errCh, 2*time.Second)
+	if cancelShutdown != nil {
+		cancelShutdown()
+	}
+	if !errors.Is(runErr, context.DeadlineExceeded) {
+		t.Fatalf("RunWithShutdownContext() error = %v, want context deadline exceeded", runErr)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("RunWithShutdownContext() returned after %v, want outer context to bound HTTP shutdown", elapsed)
+	}
+	select {
+	case err := <-requestErrCh:
+		if err == nil {
+			t.Fatal("active request completed without a transport error after coordinated forced close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active request connection remained open after coordinated shutdown")
+	}
+
+	close(release)
+	released = true
+}
+
 func TestHandlerWithExternalServerDoesNotAutoManageReadiness(t *testing.T) {
 	s := newBlackBoxServer()
 	ts := httptest.NewServer(s.Handler())

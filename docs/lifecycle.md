@@ -128,6 +128,13 @@ Use this when your service has warmup work, cache priming, data sync, or other s
 Readiness is forced false on every terminal `Run` path, including listen and
 serve-loop failures.
 
+`RunWithShutdownContext` is the advanced path for a service coordinator that
+needs HTTP shutdown to share a deadline with later application shutdown phases.
+Its factory runs once after readiness becomes false and before the drain delay.
+The returned context bounds both the drain delay and graceful HTTP shutdown,
+while `WithShutdownTimeout` remains an inner cap on `http.Server.Shutdown`.
+Standalone services should continue to use `Run`.
+
 ## Graceful shutdown
 
 Servekit supports two shutdown tuning knobs:

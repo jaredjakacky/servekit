@@ -78,6 +78,14 @@ Everything else in this file exists to customize that path without abandoning `n
 
   Standard lifecycle path. It listens on the configured address, builds the handler stack, marks readiness on startup unless readiness was set explicitly, and performs graceful shutdown on context cancellation or `SIGINT` / `SIGTERM`. Every exit clears readiness. Failed graceful shutdown is followed by forced closure of ordinary server-owned connections and a joined serve loop.
 
+- `RunWithShutdownContext(...)`
+
+  Advanced lifecycle path for a service coordinator that owns a broader shutdown budget. It invokes a `ShutdownContextFactory` after readiness becomes false and uses the returned outer context to bound the drain delay and graceful HTTP shutdown. `WithShutdownTimeout(...)` remains an inner HTTP shutdown cap.
+
+- `ShutdownContextFactory`
+
+  Creates the outer context when coordinated shutdown begins. The caller owns cancellation of the returned context and may reuse it for later service shutdown phases.
+
 - `Handler()`
 
   Builds the final wrapped handler stack without starting a listener. Use this when another component owns the outer `http.Server`.

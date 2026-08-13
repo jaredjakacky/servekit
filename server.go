@@ -32,6 +32,14 @@ const (
 
 const readinessCheckFailureReason = "one or more readiness checks failed"
 
+// ShutdownContextFactory creates an outer context when Server shutdown begins.
+//
+// Servekit calls the factory at most once, after readiness becomes false and
+// before any configured drain delay. The returned context can bound the drain
+// delay and graceful HTTP shutdown as part of a broader service shutdown
+// budget. The caller retains ownership of canceling the returned context.
+type ShutdownContextFactory func() context.Context
+
 // Server bootstraps an HTTP service with production-oriented defaults.
 //
 // Server keeps net/http as the execution model while providing explicit hooks
@@ -215,6 +223,26 @@ func (s *Server) Handler() http.Handler {
 // when more than one lifecycle operation fails. Hijacked connections remain
 // handler-owned and are not closed by net/http.Server.Shutdown or Close.
 func (s *Server) Run(ctx context.Context) error {
+	return s.run(ctx, nil)
+}
+
+// RunWithShutdownContext runs the standard Servekit lifecycle while allowing a
+// service coordinator to supply an outer shutdown context.
+//
+// When shutdown begins, RunWithShutdownContext marks readiness false, invokes
+// newShutdownContext once, and uses the returned context to bound the configured
+// drain delay and graceful HTTP shutdown. WithShutdownTimeout remains an inner
+// cap on http.Server.Shutdown. A nil factory or nil returned context preserves
+// the standalone Run behavior.
+//
+// The factory is not called when Run exits because listening or serving failed
+// before graceful shutdown began. Callers remain responsible for cleanup on
+// those paths.
+func (s *Server) RunWithShutdownContext(ctx context.Context, newShutdownContext ShutdownContextFactory) error {
+	return s.run(ctx, newShutdownContext)
+}
+
+func (s *Server) run(ctx context.Context, newShutdownContext ShutdownContextFactory) error {
 	defer s.ready.Store(false)
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -258,12 +286,15 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case <-sigCtx.Done():
 		s.ready.Store(false)
-		if s.drainDelay > 0 {
-			// Drain delay gives load balancers time to observe /readyz going false
-			// before active listeners begin graceful shutdown.
-			time.Sleep(s.drainDelay)
+		outerShutdownCtx := context.Background()
+		if newShutdownContext != nil {
+			if coordinatedCtx := newShutdownContext(); coordinatedCtx != nil {
+				outerShutdownCtx = coordinatedCtx
+			}
 		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
+		drainErr := waitForShutdownDrainDelay(outerShutdownCtx, s.drainDelay)
+
+		shutdownCtx, cancel := context.WithTimeout(outerShutdownCtx, s.shutdownTimeout)
 		shutdownErr := httpServer.Shutdown(shutdownCtx)
 		cancel()
 
@@ -273,6 +304,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		serveErr := <-serverErr
 		return errors.Join(
+			wrapRunError("shutdown drain", drainErr),
 			wrapRunError("shutdown", shutdownErr),
 			wrapRunError("close", closeErr),
 			wrapRunError("serve", serveErr),
@@ -286,6 +318,21 @@ func (s *Server) Run(ctx context.Context) error {
 			wrapRunError("serve", serveErr),
 			wrapRunError("close", closeErr),
 		)
+	}
+}
+
+func waitForShutdownDrainDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
