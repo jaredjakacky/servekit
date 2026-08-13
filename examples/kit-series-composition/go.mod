@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/jaredjakacky/configkit v0.4.0
 	github.com/jaredjakacky/dependkit v0.4.0
-	github.com/jaredjakacky/opskit v0.5.0
+	github.com/jaredjakacky/opskit v0.6.0
 	github.com/jaredjakacky/servekit v0.4.0
 	github.com/jaredjakacky/workerkit v0.6.0
 )
