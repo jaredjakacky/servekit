@@ -5,7 +5,7 @@ GO_MODULE ?= env GOWORK=off $(GO)
 GOFMT ?= gofmt
 PKGS ?= ./...
 GOFILES := $(filter-out $(shell git ls-files --deleted -- '*.go'),$(shell git ls-files -- '*.go'))
-GOVULNCHECK_VERSION ?= v1.6.0
+GOVULNCHECK_VERSION ?= v1.7.0
 COMPOSITION_EXAMPLE_DIR := examples/kit-series-composition
 TELEMETRY_EXAMPLE_DIR := examples/telemetry
 RELEASE_CHECK_DIR := tools/releasecheck
