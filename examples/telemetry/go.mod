@@ -1,7 +1,7 @@
 module github.com/jaredjakacky/servekit/examples/telemetry
 
 // renovate: datasource=custom.go-supported-floor depName=go-floor versioning=semver-coerced
-go 1.25.0
+go 1.26
 
 require (
 	github.com/jaredjakacky/servekit v0.4.0
